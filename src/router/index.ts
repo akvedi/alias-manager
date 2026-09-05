@@ -1,5 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
+import AppLayout from '@/layouts/AppLayout.vue'
+
 import DashboardView from '@/views/DashboardView.vue'
 import AliasesView from '@/views/AliasesView.vue'
 import DomainsView from '@/views/DomainsView.vue'
@@ -11,23 +13,30 @@ const router = createRouter({
   routes: [
     {
       path: '/',
-      name: 'dashboard',
-      component: DashboardView,
-    },
-    {
-      path: '/aliases',
-      name: 'aliases',
-      component: AliasesView,
-    },
-    {
-      path: '/domains',
-      name: 'domains',
-      component: DomainsView,
-    },
-    {
-      path: '/settings',
-      name: 'settings',
-      component: SettingsView,
+      component: AppLayout,
+
+      children: [
+        {
+          path: '',
+          name: 'dashboard',
+          component: DashboardView,
+        },
+        {
+          path: 'aliases',
+          name: 'aliases',
+          component: AliasesView,
+        },
+        {
+          path: 'domains',
+          name: 'domains',
+          component: DomainsView,
+        },
+        {
+          path: 'settings',
+          name: 'settings',
+          component: SettingsView,
+        },
+      ],
     },
   ],
 })
