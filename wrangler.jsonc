@@ -1,0 +1,13 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "alias-manager",
+	"main": "worker/index.ts",
+	"compatibility_date": "2026-09-07",
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "alias-manager-db",
+			"database_id": "18705632-7f00-4872-a505-46fac2702f60",
+		}
+	]
+}
