@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import CreateAliasModal from '@/components/CreateAliasModal.vue'
 
 interface Alias {
@@ -9,31 +9,39 @@ interface Alias {
   enabled: boolean
 }
 
-const aliases = ref<Alias[]>([
-  {
-    id: 1,
-    address: 'github@example.com',
-    destination: 'you@gmail.com',
-    enabled: true,
-  },
-  {
-    id: 2,
-    address: 'amazon@example.com',
-    destination: 'you@gmail.com',
-    enabled: true,
-  },
-  {
-    id: 3,
-    address: 'newsletter@example.com',
-    destination: 'you@gmail.com',
-    enabled: false,
-  },
-])
+const aliases = ref<Alias[]>([])
 
 const showCreateModal = ref(false)
 
-function toggleAlias(alias: Alias) {
-  alias.enabled = !alias.enabled
+async function loadAliases() {
+  const response = await fetch('/api/aliases')
+
+  if (!response.ok) {
+    throw new Error('Failed to load aliases')
+  }
+
+  aliases.value = await response.json()
+}
+
+onMounted(() => {
+  loadAliases()
+})
+
+async function toggleAlias(alias: Alias) {
+  const action = alias.enabled ? 'disable' : 'enable'
+
+  const response = await fetch(
+    `/api/aliases/${alias.id}/${action}`,
+    {
+      method: 'POST',
+    },
+  )
+
+  if (!response.ok) {
+    throw new Error(`Failed to ${action} alias`)
+  }
+
+  await loadAliases()
 }
 
 function openCreateModal() {
@@ -102,7 +110,7 @@ function createAlias(address: string, destination: string) {
         </div>
       </div>
     </div>
-    
+
     <CreateAliasModal
       v-if="showCreateModal"
       @close="closeCreateModal"
