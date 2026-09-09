@@ -1,6 +1,4 @@
-interface Env {
-  DB: D1Database
-}
+import { createAuth, type Env } from './lib/auth'
 
 export default {
   async fetch(
@@ -8,6 +6,25 @@ export default {
     env: Env,
   ): Promise<Response> {
     const url = new URL(request.url)
+
+    const auth = createAuth(env)
+
+    if (url.pathname.startsWith('/api/auth/')) {
+      return auth.handler(request)
+    }
+
+    const session = await auth.api.getSession({
+      headers: request.headers,
+    })
+
+    if (url.pathname.startsWith('/api/aliases')) {
+      if (!session) {
+        return Response.json(
+          { error: 'Unauthorized' },
+          { status: 401 },
+        )
+      }
+    }
 
     if (
       request.method === 'GET' &&
