@@ -32558,10 +32558,10 @@ var init_kysely_adapter = __esm({
   }
 });
 
-// .wrangler/tmp/bundle-Lhpta9/middleware-loader.entry.ts
+// .wrangler/tmp/bundle-ku3gEf/middleware-loader.entry.ts
 init_modules_watch_stub();
 
-// .wrangler/tmp/bundle-Lhpta9/middleware-insertion-facade.js
+// .wrangler/tmp/bundle-ku3gEf/middleware-insertion-facade.js
 init_modules_watch_stub();
 
 // worker/index.ts
@@ -51655,6 +51655,98 @@ function createAuth(env2) {
 }
 __name(createAuth, "createAuth");
 
+// worker/lib/mxroute.ts
+init_modules_watch_stub();
+var MXROUTE_API_BASE = "https://api.mxroute.com";
+async function createForwarder(env2, params) {
+  const response = await fetch(
+    `${MXROUTE_API_BASE}/domains/${encodeURIComponent(params.domain)}/forwarders`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Server": env2.MXROUTE_SERVER,
+        "X-Username": env2.MXROUTE_USERNAME,
+        "X-API-Key": env2.MXROUTE_API_KEY
+      },
+      body: JSON.stringify({
+        alias: params.alias,
+        destinations: params.destinations
+      })
+    }
+  );
+  if (response.status === 201) {
+    return true;
+  }
+  const errorBody = await response.text();
+  console.error(
+    "MXroute create forwarder failed:",
+    response.status,
+    errorBody
+  );
+  return false;
+}
+__name(createForwarder, "createForwarder");
+async function deleteForwarder(env2, params) {
+  const response = await fetch(
+    `${MXROUTE_API_BASE}/domains/${encodeURIComponent(params.domain)}/forwarders/${encodeURIComponent(params.alias)}`,
+    {
+      method: "DELETE",
+      headers: {
+        "X-Server": env2.MXROUTE_SERVER,
+        "X-Username": env2.MXROUTE_USERNAME,
+        "X-API-Key": env2.MXROUTE_API_KEY
+      }
+    }
+  );
+  if (response.status === 204) {
+    return true;
+  }
+  const errorBody = await response.text();
+  console.error(
+    "MXroute delete forwarder failed:",
+    response.status,
+    errorBody
+  );
+  return false;
+}
+__name(deleteForwarder, "deleteForwarder");
+async function listDomains(env2) {
+  const response = await fetch(
+    `${MXROUTE_API_BASE}/domains`,
+    {
+      method: "GET",
+      headers: {
+        "X-Server": env2.MXROUTE_SERVER,
+        "X-Username": env2.MXROUTE_USERNAME,
+        "X-API-Key": env2.MXROUTE_API_KEY
+      }
+    }
+  );
+  if (response.status === 401) {
+    console.error("MXroute domain list authentication failed");
+    return null;
+  }
+  if (!response.ok) {
+    const errorBody = await response.text();
+    console.error(
+      "MXroute list domains failed:",
+      response.status,
+      errorBody
+    );
+    return null;
+  }
+  const result = await response.json();
+  if (!result.success || !Array.isArray(result.data)) {
+    console.error(
+      "MXroute list domains returned an invalid response"
+    );
+    return null;
+  }
+  return result.data;
+}
+__name(listDomains, "listDomains");
+
 // worker/index.ts
 var worker_default = {
   async fetch(request, env2) {
@@ -51666,7 +51758,7 @@ var worker_default = {
     const session = await auth.api.getSession({
       headers: request.headers
     });
-    if (url.pathname.startsWith("/api/aliases")) {
+    if (url.pathname.startsWith("/api/aliases") || url.pathname.startsWith("/api/domains")) {
       if (!session) {
         return Response.json(
           { error: "Unauthorized" },
@@ -51674,8 +51766,39 @@ var worker_default = {
         );
       }
     }
+    if (request.method === "POST" && url.pathname === "/api/domains") {
+      return createDomain(
+        env2,
+        request,
+        session.user.id
+      );
+    }
+    if (request.method === "DELETE" && url.pathname.startsWith("/api/domains/")) {
+      const domainId = url.pathname.split("/")[3];
+      if (!domainId) {
+        return Response.json(
+          { error: "Domain ID is required" },
+          { status: 400 }
+        );
+      }
+      return deleteDomain(
+        env2,
+        domainId,
+        session.user.id
+      );
+    }
+    if (request.method === "POST" && url.pathname === "/api/aliases") {
+      return createAlias(
+        env2,
+        request,
+        session.user.id
+      );
+    }
     if (request.method === "GET" && url.pathname === "/api/aliases") {
-      return getAliases(env2);
+      return getAliases(env2, session.user.id);
+    }
+    if (request.method === "GET" && url.pathname === "/api/domains") {
+      return getDomains(env2, session.user.id);
     }
     if (request.method === "POST" && url.pathname.startsWith("/api/aliases/") && url.pathname.endsWith("/disable")) {
       const aliasId = url.pathname.split("/")[3];
@@ -51685,7 +51808,7 @@ var worker_default = {
           { status: 400 }
         );
       }
-      return disableAlias(env2, aliasId);
+      return disableAlias(env2, aliasId, session.user.id);
     }
     if (request.method === "POST" && url.pathname.startsWith("/api/aliases/") && url.pathname.endsWith("/enable")) {
       const aliasId = url.pathname.split("/")[3];
@@ -51695,7 +51818,21 @@ var worker_default = {
           { status: 400 }
         );
       }
-      return enableAlias(env2, aliasId);
+      return enableAlias(env2, aliasId, session.user.id);
+    }
+    if (request.method === "DELETE" && url.pathname.startsWith("/api/aliases/")) {
+      const aliasId = url.pathname.split("/")[3];
+      if (!aliasId) {
+        return Response.json(
+          { error: "Alias ID is required" },
+          { status: 400 }
+        );
+      }
+      return deleteAlias(
+        env2,
+        aliasId,
+        session.user.id
+      );
     }
     return Response.json(
       { error: "Not found" },
@@ -51703,7 +51840,7 @@ var worker_default = {
     );
   }
 };
-async function getAliases(env2) {
+async function getAliases(env2, userId) {
   const result = await env2.DB.prepare(`
       SELECT
         aliases.id,
@@ -51715,8 +51852,9 @@ async function getAliases(env2) {
         aliases.disabled_at
       FROM aliases
       JOIN domains ON aliases.domain_id = domains.id
+      WHERE domains.user_id = ?
       ORDER BY aliases.created_at DESC
-    `).all();
+    `).bind(userId).all();
   const aliases = result.results.map((alias) => ({
     id: alias.id,
     address: `${alias.local_part}@${alias.domain}`,
@@ -51728,44 +51866,369 @@ async function getAliases(env2) {
   return Response.json(aliases);
 }
 __name(getAliases, "getAliases");
-async function disableAlias(env2, aliasId) {
-  const result = await env2.DB.prepare(`
+async function disableAlias(env2, aliasId, userId) {
+  const alias = await env2.DB.prepare(`
+      SELECT
+        aliases.local_part,
+        domains.domain
+      FROM aliases
+      JOIN domains
+        ON aliases.domain_id = domains.id
+      WHERE aliases.id = ?
+        AND domains.user_id = ?
+        AND aliases.status = 'active'
+    `).bind(aliasId, userId).first();
+  if (!alias) {
+    return Response.json(
+      { error: "Alias not found" },
+      { status: 404 }
+    );
+  }
+  const mxrouteDeleted = await deleteForwarder(
+    env2,
+    {
+      domain: alias.domain,
+      alias: alias.local_part
+    }
+  );
+  if (!mxrouteDeleted) {
+    return Response.json(
+      {
+        error: "Failed to disable alias in MXroute"
+      },
+      { status: 502 }
+    );
+  }
+  await env2.DB.prepare(`
       UPDATE aliases
       SET
         status = 'disabled',
         disabled_at = unixepoch()
       WHERE id = ?
-    `).bind(aliasId).run();
-  if (result.meta.changes === 0) {
-    return Response.json(
-      { error: "Alias not found" },
-      { status: 404 }
-    );
-  }
+        AND domain_id IN (
+          SELECT id
+          FROM domains
+          WHERE user_id = ?
+        )
+    `).bind(aliasId, userId).run();
   return Response.json({
     success: true
   });
 }
 __name(disableAlias, "disableAlias");
-async function enableAlias(env2, aliasId) {
-  const result = await env2.DB.prepare(`
-      UPDATE aliases
-      SET
-        status = 'active',
-        disabled_at = NULL
-      WHERE id = ?
-    `).bind(aliasId).run();
-  if (result.meta.changes === 0) {
+async function enableAlias(env2, aliasId, userId) {
+  const alias = await env2.DB.prepare(`
+      SELECT
+        aliases.local_part,
+        aliases.destination,
+        domains.domain
+      FROM aliases
+      JOIN domains
+        ON aliases.domain_id = domains.id
+      WHERE aliases.id = ?
+        AND domains.user_id = ?
+        AND aliases.status = 'disabled'
+    `).bind(aliasId, userId).first();
+  if (!alias) {
     return Response.json(
       { error: "Alias not found" },
       { status: 404 }
     );
   }
+  const mxrouteCreated = await createForwarder(
+    env2,
+    {
+      domain: alias.domain,
+      alias: alias.local_part,
+      destinations: [alias.destination]
+    }
+  );
+  if (!mxrouteCreated) {
+    return Response.json(
+      {
+        error: "Failed to enable alias in MXroute"
+      },
+      { status: 502 }
+    );
+  }
+  await env2.DB.prepare(`
+      UPDATE aliases
+      SET
+        status = 'active',
+        disabled_at = NULL
+      WHERE id = ?
+        AND domain_id IN (
+          SELECT id
+          FROM domains
+          WHERE user_id = ?
+        )
+    `).bind(aliasId, userId).run();
   return Response.json({
     success: true
   });
 }
 __name(enableAlias, "enableAlias");
+async function createAlias(env2, request, userId) {
+  const body = await request.json();
+  if (!body.address || !body.destination) {
+    return Response.json(
+      {
+        error: "Address and destination are required"
+      },
+      { status: 400 }
+    );
+  }
+  const atIndex = body.address.lastIndexOf("@");
+  if (atIndex <= 0 || atIndex === body.address.length - 1) {
+    return Response.json(
+      {
+        error: "Invalid alias address"
+      },
+      { status: 400 }
+    );
+  }
+  const localPart = body.address.slice(0, atIndex);
+  const domain = body.address.slice(atIndex + 1);
+  const domainResult = await env2.DB.prepare(`
+      SELECT id
+      FROM domains
+      WHERE user_id = ?
+        AND domain = ?
+    `).bind(userId, domain).first();
+  if (!domainResult) {
+    return Response.json(
+      {
+        error: "Domain not found"
+      },
+      { status: 404 }
+    );
+  }
+  const aliasId = crypto.randomUUID();
+  const mxrouteCreated = await createForwarder(
+    env2,
+    {
+      domain,
+      alias: localPart,
+      destinations: [body.destination]
+    }
+  );
+  if (!mxrouteCreated) {
+    return Response.json(
+      {
+        error: "Failed to create alias in MXroute"
+      },
+      { status: 502 }
+    );
+  }
+  try {
+    await env2.DB.prepare(`
+        INSERT INTO aliases (
+          id,
+          domain_id,
+          local_part,
+          destination,
+          status,
+          created_at
+        )
+        VALUES (?, ?, ?, ?, 'active', unixepoch())
+      `).bind(
+      aliasId,
+      domainResult.id,
+      localPart,
+      body.destination
+    ).run();
+  } catch (error3) {
+    console.error(error3);
+    return Response.json(
+      {
+        error: "Alias already exists or could not be created"
+      },
+      { status: 409 }
+    );
+  }
+  return Response.json(
+    {
+      success: true,
+      id: aliasId
+    },
+    { status: 201 }
+  );
+}
+__name(createAlias, "createAlias");
+async function createDomain(env2, request, userId) {
+  const body = await request.json();
+  if (!body.domain) {
+    return Response.json(
+      { error: "Domain is required" },
+      { status: 400 }
+    );
+  }
+  const domain = body.domain.trim().toLowerCase();
+  if (!domain) {
+    return Response.json(
+      { error: "Domain is required" },
+      { status: 400 }
+    );
+  }
+  const mxrouteDomains = await listDomains(env2);
+  if (!mxrouteDomains) {
+    return Response.json(
+      {
+        error: "Could not verify the domain with MXroute"
+      },
+      { status: 502 }
+    );
+  }
+  const domainExists = mxrouteDomains.some(
+    (mxrouteDomain) => mxrouteDomain.toLowerCase() === domain
+  );
+  if (!domainExists) {
+    return Response.json(
+      {
+        error: "Domain was not found in your MXroute account"
+      },
+      { status: 400 }
+    );
+  }
+  const domainId = crypto.randomUUID();
+  try {
+    await env2.DB.prepare(`
+        INSERT INTO domains (
+          id,
+          user_id,
+          domain,
+          created_at
+        )
+        VALUES (?, ?, ?, unixepoch())
+      `).bind(
+      domainId,
+      userId,
+      domain
+    ).run();
+  } catch (error3) {
+    console.error(error3);
+    return Response.json(
+      {
+        error: "Domain already exists or could not be created"
+      },
+      { status: 409 }
+    );
+  }
+  return Response.json(
+    {
+      success: true,
+      id: domainId
+    },
+    { status: 201 }
+  );
+}
+__name(createDomain, "createDomain");
+async function getDomains(env2, userId) {
+  const result = await env2.DB.prepare(`
+      SELECT
+        id,
+        domain,
+        created_at
+      FROM domains
+      WHERE user_id = ?
+      ORDER BY created_at DESC
+    `).bind(userId).all();
+  return Response.json(
+    result.results.map((domain) => ({
+      id: domain.id,
+      domain: domain.domain,
+      createdAt: domain.created_at
+    }))
+  );
+}
+__name(getDomains, "getDomains");
+async function deleteAlias(env2, aliasId, userId) {
+  const alias = await env2.DB.prepare(`
+      SELECT
+        aliases.local_part,
+        aliases.status,
+        domains.domain
+      FROM aliases
+      JOIN domains
+        ON aliases.domain_id = domains.id
+      WHERE aliases.id = ?
+        AND domains.user_id = ?
+    `).bind(aliasId, userId).first();
+  if (!alias) {
+    return Response.json(
+      { error: "Alias not found" },
+      { status: 404 }
+    );
+  }
+  if (alias.status === "active") {
+    const mxrouteDeleted = await deleteForwarder(
+      env2,
+      {
+        domain: alias.domain,
+        alias: alias.local_part
+      }
+    );
+    if (!mxrouteDeleted) {
+      return Response.json(
+        {
+          error: "Failed to delete alias from MXroute"
+        },
+        { status: 502 }
+      );
+    }
+  }
+  await env2.DB.prepare(`
+      DELETE FROM aliases
+      WHERE id = ?
+        AND domain_id IN (
+          SELECT id
+          FROM domains
+          WHERE user_id = ?
+        )
+    `).bind(aliasId, userId).run();
+  return Response.json({
+    success: true
+  });
+}
+__name(deleteAlias, "deleteAlias");
+async function deleteDomain(env2, domainId, userId) {
+  const domain = await env2.DB.prepare(`
+      SELECT
+        id,
+        domain
+      FROM domains
+      WHERE id = ?
+        AND user_id = ?
+    `).bind(domainId, userId).first();
+  if (!domain) {
+    return Response.json(
+      { error: "Domain not found" },
+      { status: 404 }
+    );
+  }
+  const aliasCount = await env2.DB.prepare(`
+      SELECT COUNT(*) AS count
+      FROM aliases
+      WHERE domain_id = ?
+    `).bind(domainId).first();
+  if (aliasCount && aliasCount.count > 0) {
+    return Response.json(
+      {
+        error: `Cannot delete domain while it has ${aliasCount.count} alias${aliasCount.count === 1 ? "" : "es"}`
+      },
+      { status: 409 }
+    );
+  }
+  await env2.DB.prepare(`
+      DELETE FROM domains
+      WHERE id = ?
+        AND user_id = ?
+    `).bind(domainId, userId).run();
+  return Response.json({
+    success: true
+  });
+}
+__name(deleteDomain, "deleteDomain");
 
 // node_modules/.pnpm/wrangler@4.129.0/node_modules/wrangler/templates/middleware/middleware-ensure-req-body-drained.ts
 init_modules_watch_stub();
@@ -51816,7 +52279,7 @@ var jsonError = /* @__PURE__ */ __name(async (request, env2, _ctx, middlewareCtx
 }, "jsonError");
 var middleware_miniflare3_json_error_default = jsonError;
 
-// .wrangler/tmp/bundle-Lhpta9/middleware-insertion-facade.js
+// .wrangler/tmp/bundle-ku3gEf/middleware-insertion-facade.js
 var __INTERNAL_WRANGLER_MIDDLEWARE__ = [
   middleware_ensure_req_body_drained_default,
   middleware_miniflare3_json_error_default
@@ -51849,7 +52312,7 @@ function __facade_invoke__(request, env2, ctx, dispatch, finalMiddleware) {
 }
 __name(__facade_invoke__, "__facade_invoke__");
 
-// .wrangler/tmp/bundle-Lhpta9/middleware-loader.entry.ts
+// .wrangler/tmp/bundle-ku3gEf/middleware-loader.entry.ts
 var __Facade_ScheduledController__ = class ___Facade_ScheduledController__ {
   constructor(scheduledTime, cron, noRetry) {
     this.scheduledTime = scheduledTime;

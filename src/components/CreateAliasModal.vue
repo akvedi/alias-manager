@@ -1,78 +1,136 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
+
+interface Domain {
+  id: string
+  domain: string
+}
 
 const emit = defineEmits<{
   close: []
   create: [address: string, destination: string]
 }>()
 
-const address = ref('')
+const localPart = ref('')
+const selectedDomain = ref('')
 const destination = ref('')
+
+const domains = ref<Domain[]>([])
+const loadingDomains = ref(true)
+const error = ref('')
+
+async function loadDomains() {
+  loadingDomains.value = true
+  error.value = ''
+
+  try {
+    const response = await fetch('/api/domains')
+
+    if (!response.ok) {
+      throw new Error('Failed to load domains')
+    }
+
+    domains.value = await response.json()
+
+    if (domains.value.length > 0) {
+      selectedDomain.value = domains.value[0].domain
+    }
+  } catch {
+    error.value = 'Could not load your domains.'
+  } finally {
+    loadingDomains.value = false
+  }
+}
 
 function closeModal() {
   emit('close')
 }
 
 function createAlias() {
-  if (!address.value || !destination.value) {
+  if (
+    !localPart.value ||
+    !selectedDomain.value ||
+    !destination.value
+  ) {
     return
   }
 
-  emit('create', address.value, destination.value)
+  const address = `${localPart.value}@${selectedDomain.value}`
 
-  address.value = ''
+  emit(
+    'create',
+    address,
+    destination.value,
+  )
+
+  localPart.value = ''
+  selectedDomain.value = ''
   destination.value = ''
 }
+
+onMounted(() => {
+  loadDomains()
+})
 </script>
 
 <template>
-  <div class="modal-backdrop" @click.self="closeModal">
+  <div class="modal-overlay">
     <div class="modal">
-      <div class="modal-header">
-        <div>
-          <h2>Create alias</h2>
-          <p>Create a new email alias.</p>
-        </div>
-
-        <button
-          class="close-button"
-          @click="closeModal"
-        >
-          ×
-        </button>
-      </div>
+      <h2>Create Alias</h2>
 
       <form @submit.prevent="createAlias">
-        <div class="form-group">
-          <label for="address">
-            Alias address
-          </label>
-
+        <label>
+          Alias name
           <input
-            id="address"
-            v-model="address"
-            type="email"
-            placeholder="github@example.com"
+            v-model="localPart"
+            type="text"
+            placeholder="github"
+            required
           />
-        </div>
+        </label>
 
-        <div class="form-group">
-          <label for="destination">
-            Destination
-          </label>
+        <label>
+          Domain
+          <select
+            v-model="selectedDomain"
+            :disabled="loadingDomains || domains.length === 0"
+            required
+          >
+            <option
+              v-for="domain in domains"
+              :key="domain.id"
+              :value="domain.domain"
+            >
+              {{ domain.domain }}
+            </option>
+          </select>
+        </label>
 
+        <p v-if="loadingDomains">
+          Loading domains...
+        </p>
+
+        <p v-else-if="domains.length === 0">
+          You don't have any domains yet.
+        </p>
+
+        <label>
+          Destination
           <input
-            id="destination"
             v-model="destination"
             type="email"
-            placeholder="you@gmail.com"
+            placeholder="you@example.com"
+            required
           />
-        </div>
+        </label>
+
+        <p v-if="error" class="error">
+          {{ error }}
+        </p>
 
         <div class="modal-actions">
           <button
             type="button"
-            class="cancel-button"
             @click="closeModal"
           >
             Cancel
@@ -80,9 +138,12 @@ function createAlias() {
 
           <button
             type="submit"
-            class="create-button"
+            :disabled="
+              loadingDomains ||
+              domains.length === 0
+            "
           >
-            Create alias
+            Create Alias
           </button>
         </div>
       </form>
@@ -91,98 +152,45 @@ function createAlias() {
 </template>
 
 <style scoped>
-.modal-backdrop {
+.modal-overlay {
   position: fixed;
   inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 20px;
   background: rgb(0 0 0 / 50%);
+  display: grid;
+  place-items: center;
 }
 
 .modal {
   width: 100%;
-  max-width: 480px;
+  max-width: 500px;
   padding: 24px;
-  border-radius: 10px;
   background: white;
-  box-shadow: 0 20px 40px rgb(0 0 0 / 20%);
+  border-radius: 8px;
 }
 
-.modal-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 24px;
+form {
+  display: grid;
+  gap: 16px;
+  margin-top: 20px;
 }
 
-.modal-header h2 {
-  margin: 0 0 6px;
-  font-size: 20px;
-}
-
-.modal-header p {
-  margin: 0;
-  color: #666;
-}
-
-.close-button {
-  border: none;
-  background: transparent;
-  font-size: 24px;
-  line-height: 1;
-  color: #666;
-  cursor: pointer;
-}
-
-.form-group {
-  display: flex;
-  flex-direction: column;
+label {
+  display: grid;
   gap: 6px;
-  margin-bottom: 18px;
 }
 
-.form-group label {
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.form-group input {
-  padding: 10px 12px;
-  border: 1px solid #ccc;
-  border-radius: 6px;
-  font: inherit;
-}
-
-.form-group input:focus {
-  outline: 2px solid #999;
-  outline-offset: 1px;
+input,
+select {
+  padding: 10px;
 }
 
 .modal-actions {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
-  margin-top: 24px;
 }
 
-.cancel-button,
-.create-button {
-  padding: 10px 16px;
-  border-radius: 6px;
-  font: inherit;
-  cursor: pointer;
-}
-
-.cancel-button {
-  border: 1px solid #ccc;
-  background: white;
-}
-
-.create-button {
-  border: none;
-  background: #111;
-  color: white;
+.error {
+  color: #b00020;
 }
 </style>

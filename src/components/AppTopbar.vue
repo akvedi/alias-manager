@@ -1,20 +1,53 @@
 <script setup lang="ts">
+import { onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
+
+import { authClient } from '@/lib/auth-client'
+
+const router = useRouter()
+
+const userEmail = ref('')
+
+async function loadSession() {
+  const { data: session } = await authClient.getSession()
+
+  if (session) {
+    userEmail.value = session.user.email
+  }
+}
+
+async function logout() {
+  await authClient.signOut()
+  await router.push('/login')
+}
+
+onMounted(() => {
+  loadSession()
+})
 </script>
 
 <template>
-  <header class="topbar">
-    <span>Alias Manager</span>
-    <span>Account</span>
+  <header
+    class="flex h-16 items-center justify-between border-b border-gray-200 bg-white px-8"
+  >
+    <span class="text-lg font-semibold text-gray-900">
+      Alias Manager
+    </span>
+
+    <div class="flex items-center gap-4">
+      <span
+        v-if="userEmail"
+        class="text-sm text-gray-600"
+      >
+        {{ userEmail }}
+      </span>
+
+      <button
+        class="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 cursor-pointer"
+        @click="logout"
+      >
+        Logout
+      </button>
+    </div>
   </header>
 </template>
-
-<style scoped>
-.topbar {
-  height: 64px;
-  padding: 0 32px;
-  border-bottom: 1px solid #ddd;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-</style>
