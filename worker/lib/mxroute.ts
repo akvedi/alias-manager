@@ -2,10 +2,22 @@ import type { Env } from './auth'
 
 const MXROUTE_API_BASE = 'https://api.mxroute.com'
 
+export type AliasDestinationType =
+  | 'forward'
+  | 'fail'
+  | 'blackhole'
+
+export interface ForwarderConfiguration {
+  alias: string
+  destinationType: AliasDestinationType
+  destination?: string
+}
+
 interface CreateForwarderParams {
   domain: string
   alias: string
-  destinations: string[]
+  destinationType: AliasDestinationType
+  destination?: string
 }
 
 export async function createForwarder(
@@ -26,7 +38,9 @@ export async function createForwarder(
 
       body: JSON.stringify({
         alias: params.alias,
-        destinations: params.destinations,
+        destinations: [
+          params.destinationType === 'forward' ? params.destination : (params.destinationType === 'fail' ? ':fail:' : ':blackhole:'),
+        ],
       }),
     },
   )

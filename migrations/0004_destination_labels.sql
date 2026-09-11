@@ -1,0 +1,1 @@
+ALTER TABLE destinations ADD COLUMN label TEXT NOT NULL DEFAULT '';

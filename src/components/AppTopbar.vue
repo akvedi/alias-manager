@@ -37,13 +37,13 @@ onMounted(() => {
     <div class="flex items-center gap-4">
       <span
         v-if="userEmail"
-        class="text-sm text-gray-600"
+        class="text-sm text-gray-600 font-bold"
       >
-        {{ userEmail }}
+        👨🏽 {{ userEmail }}
       </span>
 
       <button
-        class="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 cursor-pointer"
+        class="rounded-md border border-gray-300 bg-red-600 px-3 py-2 text-sm font-medium text-white transition hover:bg-red-300 hover:text-gray-700 cursor-pointer"
         @click="logout"
       >
         Logout
