@@ -1,5 +1,10 @@
 import { createAuth, type Env } from './lib/auth'
-import { createForwarder, deleteForwarder, listDomains } from './lib/mxroute'
+import {
+  createDisabledForwarder,
+  createForwarder,
+  deleteForwarder,
+  listDomains,
+} from './lib/mxroute'
 import { getDashboard } from './routes/dashboard'
 import {
   createDestination,
@@ -25,7 +30,12 @@ export default {
       headers: request.headers,
     })
 
-    if (url.pathname.startsWith('/api/aliases') || url.pathname.startsWith('/api/domains') || url.pathname.startsWith('/api/destinations') ||  url.pathname === '/api/dashboard') {
+    if (
+      url.pathname.startsWith('/api/aliases') ||
+      url.pathname.startsWith('/api/domains') ||
+      url.pathname.startsWith('/api/destinations') ||
+      url.pathname === '/api/dashboard'
+    ) {
       if (!session) {
         return Response.json(
           { error: 'Unauthorized' },
@@ -80,14 +90,20 @@ export default {
       request.method === 'GET' &&
       url.pathname === '/api/aliases'
     ) {
-      return getAliases(env, session.user.id)
+      return getAliases(
+        env,
+        session.user.id,
+      )
     }
 
     if (
       request.method === 'GET' &&
       url.pathname === '/api/domains'
     ) {
-      return getDomains(env, session.user.id)
+      return getDomains(
+        env,
+        session.user.id,
+      )
     }
 
     if (
@@ -114,14 +130,18 @@ export default {
         )
       }
 
-      return disableAlias(env, aliasId, session.user.id)
+      return disableAlias(
+        env,
+        aliasId,
+        session.user.id,
+      )
     }
 
     if (
       request.method === 'POST' &&
       url.pathname.startsWith('/api/aliases/') &&
       url.pathname.endsWith('/enable')
-      ) {
+    ) {
       const aliasId = url.pathname.split('/')[3]
 
       if (!aliasId) {
@@ -131,7 +151,11 @@ export default {
         )
       }
 
-      return enableAlias(env, aliasId, session.user.id)
+      return enableAlias(
+        env,
+        aliasId,
+        session.user.id,
+      )
     }
 
     if (
@@ -244,7 +268,9 @@ export default {
   },
 }
 
-function isValidEmailAddress(value: string): boolean {
+function isValidEmailAddress(
+  value: string,
+): boolean {
   const email = value.trim()
 
   if (email.length > 254) {
@@ -253,12 +279,21 @@ function isValidEmailAddress(value: string): boolean {
 
   const atIndex = email.lastIndexOf('@')
 
-  if (atIndex <= 0 || atIndex === email.length - 1) {
+  if (
+    atIndex <= 0 ||
+    atIndex === email.length - 1
+  ) {
     return false
   }
 
-  const localPart = email.slice(0, atIndex)
-  const domain = email.slice(atIndex + 1)
+  const localPart = email.slice(
+    0,
+    atIndex,
+  )
+
+  const domain = email.slice(
+    atIndex + 1,
+  )
 
   if (
     localPart.length > 64 ||
@@ -290,10 +325,15 @@ function isValidEmailAddress(value: string): boolean {
   return /^[^\s@]+@[^\s@]+$/.test(email)
 }
 
-function isValidLocalPart(value: string): boolean {
+function isValidLocalPart(
+  value: string,
+): boolean {
   const localPart = value.trim()
 
-  if (!localPart || localPart.length > 64) {
+  if (
+    !localPart ||
+    localPart.length > 64
+  ) {
     return false
   }
 
@@ -311,7 +351,7 @@ function isValidLocalPart(value: string): boolean {
 async function getAliases(
   env: Env,
   userId: string,
- ): Promise<Response> {
+): Promise<Response> {
   const result = await env.DB
     .prepare(`
       SELECT
@@ -319,28 +359,34 @@ async function getAliases(
         aliases.local_part,
         domains.domain,
         aliases.destination,
-        aliases.destination_type,
+        aliases.disabled_behavior,
         aliases.note,
         aliases.status,
         aliases.created_at,
         aliases.disabled_at
       FROM aliases
-      JOIN domains ON aliases.domain_id = domains.id
+      JOIN domains
+        ON aliases.domain_id = domains.id
       WHERE domains.user_id = ?
       ORDER BY aliases.created_at DESC
     `)
     .bind(userId)
     .all()
 
-  const aliases = result.results.map((alias) => ({
-    id: alias.id,
-    address: `${alias.local_part}@${alias.domain}`,
-    destination: alias.destination,
-    destinationType: alias.destination_type,
-    note: alias.note,
-    enabled: alias.status === 'active',
-    createdAt: alias.created_at,
-  }))
+  const aliases = result.results.map(
+    (alias) => ({
+      id: alias.id,
+      address: `${alias.local_part}@${alias.domain}`,
+      destination: alias.destination,
+      disabledBehavior:
+        alias.disabled_behavior,
+      note: alias.note,
+      enabled:
+        alias.status === 'active',
+      createdAt:
+        alias.created_at,
+    }),
+  )
 
   return Response.json(aliases)
 }
@@ -349,11 +395,13 @@ async function disableAlias(
   env: Env,
   aliasId: string,
   userId: string,
- ): Promise<Response> {
+): Promise<Response> {
   const alias = await env.DB
     .prepare(`
       SELECT
         aliases.local_part,
+        aliases.destination,
+        aliases.disabled_behavior,
         domains.domain
       FROM aliases
       JOIN domains
@@ -365,6 +413,10 @@ async function disableAlias(
     .bind(aliasId, userId)
     .first<{
       local_part: string
+      destination: string | null
+      disabled_behavior:
+        | 'blackhole'
+        | 'reject'
       domain: string
     }>()
 
@@ -375,38 +427,166 @@ async function disableAlias(
     )
   }
 
-  const mxrouteDeleted = await deleteForwarder(
-    env,
-    {
+  if (!alias.destination) {
+    return Response.json(
+      {
+        error:
+          'Alias has no destination email and cannot be disabled safely.',
+      },
+      { status: 409 },
+    )
+  }
+
+  /*
+   * Remove the current forwarding
+   * configuration.
+   */
+  const mxrouteDeleted =
+    await deleteForwarder(env, {
       domain: alias.domain,
       alias: alias.local_part,
-    },
-  )
+    })
 
   if (!mxrouteDeleted) {
     return Response.json(
       {
-        error: 'Failed to disable alias in MXroute',
+        error:
+          'Failed to disable alias in MXroute',
       },
       { status: 502 },
     )
   }
 
-  await env.DB
-    .prepare(`
-      UPDATE aliases
-      SET
-        status = 'disabled',
-        disabled_at = unixepoch()
-      WHERE id = ?
-        AND domain_id IN (
-          SELECT id
-          FROM domains
-          WHERE user_id = ?
+  /*
+   * Replace forwarding with the configured
+   * disabled behavior.
+   */
+  const disabledCreated =
+    await createDisabledForwarder(env, {
+      domain: alias.domain,
+      alias: alias.local_part,
+      behavior:
+        alias.disabled_behavior,
+    })
+
+  if (!disabledCreated) {
+    /*
+     * Try to restore the original
+     * forwarding configuration.
+     */
+    const restored =
+      await createForwarder(env, {
+        domain: alias.domain,
+        alias: alias.local_part,
+        destination:
+          alias.destination,
+      })
+
+    if (!restored) {
+      console.error(
+        'CRITICAL: Failed to disable alias and failed to restore original MXroute configuration',
+        {
+          aliasId,
+          domain: alias.domain,
+          localPart:
+            alias.local_part,
+        },
+      )
+    }
+
+    return Response.json(
+      {
+        error:
+          'Failed to disable alias in MXroute',
+      },
+      { status: 502 },
+    )
+  }
+
+  try {
+    const result = await env.DB
+      .prepare(`
+        UPDATE aliases
+        SET
+          status = 'disabled',
+          disabled_at = unixepoch()
+        WHERE id = ?
+          AND domain_id IN (
+            SELECT id
+            FROM domains
+            WHERE user_id = ?
+          )
+      `)
+      .bind(aliasId, userId)
+      .run()
+
+    if (result.meta.changes !== 1) {
+      throw new Error(
+        `Expected 1 D1 update, got ${result.meta.changes}`,
+      )
+    }
+  } catch (error) {
+    console.error(
+      'CRITICAL: Alias was changed to disabled behavior in MXroute but D1 update failed',
+      {
+        aliasId,
+        domain: alias.domain,
+        localPart:
+          alias.local_part,
+        error,
+      },
+    )
+
+    /*
+     * Restore the original forwarding
+     * configuration.
+     */
+    const deletedDisabledConfig =
+      await deleteForwarder(env, {
+        domain: alias.domain,
+        alias: alias.local_part,
+      })
+
+    if (deletedDisabledConfig) {
+      const restored =
+        await createForwarder(env, {
+          domain: alias.domain,
+          alias: alias.local_part,
+          destination:
+            alias.destination,
+        })
+
+      if (!restored) {
+        console.error(
+          'CRITICAL: Failed to restore original forwarding configuration after D1 failure',
+          {
+            aliasId,
+            domain: alias.domain,
+            localPart:
+              alias.local_part,
+          },
         )
-    `)
-    .bind(aliasId, userId)
-    .run()
+      }
+    } else {
+      console.error(
+        'CRITICAL: Failed to remove disabled MXroute configuration after D1 failure',
+        {
+          aliasId,
+          domain: alias.domain,
+          localPart:
+            alias.local_part,
+        },
+      )
+    }
+
+    return Response.json(
+      {
+        error:
+          'Alias could not be disabled completely. Please contact support.',
+      },
+      { status: 500 },
+    )
+  }
 
   return Response.json({
     success: true,
@@ -417,12 +597,13 @@ async function enableAlias(
   env: Env,
   aliasId: string,
   userId: string,
-  ): Promise<Response> {
+): Promise<Response> {
   const alias = await env.DB
     .prepare(`
       SELECT
         aliases.local_part,
         aliases.destination,
+        aliases.disabled_behavior,
         domains.domain
       FROM aliases
       JOIN domains
@@ -434,7 +615,10 @@ async function enableAlias(
     .bind(aliasId, userId)
     .first<{
       local_part: string
-      destination: string
+      destination: string | null
+      disabled_behavior:
+        | 'blackhole'
+        | 'reject'
       domain: string
     }>()
 
@@ -445,39 +629,174 @@ async function enableAlias(
     )
   }
 
-  const mxrouteCreated = await createForwarder(
-    env,
-    {
-      domain: alias.domain,
-      alias: alias.local_part,
-      destinations: [alias.destination],
-    },
-  )
-
-  if (!mxrouteCreated) {
+  /*
+   * A disabled alias must have a real
+   * destination before it can be enabled.
+   */
+  if (!alias.destination) {
     return Response.json(
       {
-        error: 'Failed to enable alias in MXroute',
+        error:
+          'Alias needs a destination email before it can be enabled.',
+      },
+      { status: 409 },
+    )
+  }
+
+  /*
+   * Remove the disabled MXroute
+   * configuration.
+   */
+  const mxrouteDeleted =
+    await deleteForwarder(env, {
+      domain: alias.domain,
+      alias: alias.local_part,
+    })
+
+  if (!mxrouteDeleted) {
+    return Response.json(
+      {
+        error:
+          'Failed to enable alias in MXroute',
       },
       { status: 502 },
     )
   }
 
-  await env.DB
-    .prepare(`
-      UPDATE aliases
-      SET
-        status = 'active',
-        disabled_at = NULL
-      WHERE id = ?
-        AND domain_id IN (
-          SELECT id
-          FROM domains
-          WHERE user_id = ?
+  /*
+   * Restore the saved forwarding
+   * destination.
+   */
+  const restored =
+    await createForwarder(env, {
+      domain: alias.domain,
+      alias: alias.local_part,
+      destination:
+        alias.destination,
+    })
+
+  if (!restored) {
+    /*
+     * Try to restore the disabled
+     * behavior.
+     */
+    const disabledRestored =
+      await createDisabledForwarder(env, {
+        domain: alias.domain,
+        alias: alias.local_part,
+        behavior:
+          alias.disabled_behavior,
+      })
+
+    if (!disabledRestored) {
+      console.error(
+        'CRITICAL: Failed to enable alias and failed to restore disabled MXroute configuration',
+        {
+          aliasId,
+          domain: alias.domain,
+          localPart:
+            alias.local_part,
+        },
+      )
+    }
+
+    return Response.json(
+      {
+        error:
+          'Failed to enable alias in MXroute',
+      },
+      { status: 502 },
+    )
+  }
+
+  try {
+    const result = await env.DB
+      .prepare(`
+        UPDATE aliases
+        SET
+          status = 'active',
+          disabled_at = NULL
+        WHERE id = ?
+          AND domain_id IN (
+            SELECT id
+            FROM domains
+            WHERE user_id = ?
+          )
+      `)
+      .bind(aliasId, userId)
+      .run()
+
+    if (result.meta.changes !== 1) {
+      throw new Error(
+        `Expected 1 D1 update, got ${result.meta.changes}`,
+      )
+    }
+  } catch (error) {
+    console.error(
+      'CRITICAL: Alias was restored in MXroute but D1 update failed',
+      {
+        aliasId,
+        domain: alias.domain,
+        localPart:
+          alias.local_part,
+        error,
+      },
+    )
+
+    /*
+     * Remove the restored forwarding
+     * configuration.
+     */
+    const deletedRestoredConfig =
+      await deleteForwarder(env, {
+        domain: alias.domain,
+        alias: alias.local_part,
+      })
+
+    if (deletedRestoredConfig) {
+      /*
+       * D1 still says the alias is disabled,
+       * so restore its disabled behavior.
+       */
+      const disabledRestored =
+        await createDisabledForwarder(env, {
+          domain: alias.domain,
+          alias: alias.local_part,
+          behavior:
+            alias.disabled_behavior,
+        })
+
+      if (!disabledRestored) {
+        console.error(
+          'CRITICAL: Failed to restore disabled MXroute configuration after D1 failure',
+          {
+            aliasId,
+            domain: alias.domain,
+            localPart:
+              alias.local_part,
+          },
         )
-    `)
-    .bind(aliasId, userId)
-    .run()
+      }
+    } else {
+      console.error(
+        'CRITICAL: Failed to remove restored MXroute forwarding configuration after D1 failure',
+        {
+          aliasId,
+          domain: alias.domain,
+          localPart:
+            alias.local_part,
+        },
+      )
+    }
+
+    return Response.json(
+      {
+        error:
+          'Alias could not be enabled completely. Please contact support.',
+      },
+      { status: 500 },
+    )
+  }
 
   return Response.json({
     success: true,
@@ -488,134 +807,167 @@ async function createAlias(
   env: Env,
   request: Request,
   userId: string,
- ): Promise<Response> {
+): Promise<Response> {
   const body = await request.json<{
     address?: string
-    destinationType?: 'forward' | 'fail' | 'blackhole'
     destination?: string
+    rejectWhenDisabled?: boolean
     note?: string
   }>()
 
-  if (!body.address || !body.destinationType) {
+  const address =
+    body.address?.trim()
+
+  const destination =
+    body.destination
+      ?.trim()
+      .toLowerCase()
+
+  if (!address) {
     return Response.json(
       {
-        error: 'Address and destination type are required',
+        error:
+          'Alias address is required',
+      },
+      { status: 400 },
+    )
+  }
+
+  if (!destination) {
+    return Response.json(
+      {
+        error:
+          'Destination is required',
+      },
+      { status: 400 },
+    )
+  }
+
+  if (!isValidEmailAddress(destination)) {
+    return Response.json(
+      {
+        error:
+          'Invalid destination email address',
       },
       { status: 400 },
     )
   }
 
   if (
-    body.destinationType !== 'forward' &&
-    body.destinationType !== 'fail' &&
-    body.destinationType !== 'blackhole'
-  ) {
-    return Response.json(
-      { error: 'Invalid destination type' },
-      { status: 400 },
-    )
-  }
-
-  if (
-    body.destinationType === 'forward' &&
-    !body.destination?.trim()
+    body.note &&
+    body.note.trim().length > 500
   ) {
     return Response.json(
       {
         error:
-          'Destination email is required for forwarding aliases',
+          'Note must be 500 characters or less',
       },
       { status: 400 },
     )
   }
 
-  if (
-    body.destinationType === 'forward' &&
-    !isValidEmailAddress(body.destination!)
-  ) {
-    return Response.json(
-      { error: 'Invalid destination email address' },
-      { status: 400 },
-    )
-  }
-
-  if (body.note && body.note.trim().length > 500) {
-    return Response.json(
-      { error: 'Note must be 500 characters or less' },
-      { status: 400 },
-    )
-  }
-
-  const atIndex = body.address.lastIndexOf('@')
+  const atIndex =
+    address.lastIndexOf('@')
 
   if (
     atIndex <= 0 ||
-    atIndex === body.address.length - 1
+    atIndex === address.length - 1
   ) {
     return Response.json(
-      { error: 'Invalid alias address' },
+      {
+        error:
+          'Invalid alias address',
+      },
       { status: 400 },
     )
   }
 
-  const localPart = body.address
-    .slice(0, atIndex)
-    .trim()
+  const localPart =
+    address
+      .slice(0, atIndex)
+      .trim()
 
-  const domain = body.address
-    .slice(atIndex + 1)
-    .trim()
-    .toLowerCase()
+  const domain =
+    address
+      .slice(atIndex + 1)
+      .trim()
+      .toLowerCase()
 
   if (!isValidLocalPart(localPart)) {
     return Response.json(
-      { error: 'Invalid alias name' },
+      {
+        error:
+          'Invalid alias address',
+      },
       { status: 400 },
     )
   }
 
-  if (!localPart || !domain) {
+  if (!domain) {
     return Response.json(
-      { error: 'Invalid alias address' },
+      {
+        error:
+          'Invalid alias domain',
+      },
       { status: 400 },
     )
   }
 
-  const domainResult = await env.DB
-    .prepare(`
-      SELECT id
-      FROM domains
-      WHERE user_id = ?
-        AND domain = ?
-    `)
-    .bind(userId, domain)
-    .first<{ id: string }>()
+  const domainRecord =
+    await env.DB
+      .prepare(`
+        SELECT id, domain
+        FROM domains
+        WHERE user_id = ?
+          AND domain = ?
+      `)
+      .bind(
+        userId,
+        domain,
+      )
+      .first<{
+        id: string
+        domain: string
+      }>()
 
-  if (!domainResult) {
+  if (!domainRecord) {
     return Response.json(
-      { error: 'Domain not found' },
-      { status: 404 },
+      {
+        error:
+          'Domain is not registered in Alias Manager',
+      },
+      { status: 400 },
     )
   }
 
-  const aliasId = crypto.randomUUID()
+  const disabledBehavior =
+    body.rejectWhenDisabled
+      ? 'reject'
+      : 'blackhole'
 
-  const mxrouteCreated = await createForwarder(
-    env,
-    {
+  /*
+   * New aliases are always created
+   * as active forwarding aliases.
+   */
+  const mxrouteCreated =
+    await createForwarder(env, {
       domain,
       alias: localPart,
-      destinationType: body.destinationType,
-      destination: body.destination?.trim(),
-    },
-  )
+      destination,
+    })
 
   if (!mxrouteCreated) {
     return Response.json(
-      { error: 'Failed to create alias in MXroute' },
+      {
+        error:
+          'Failed to create alias in MXroute',
+      },
       { status: 502 },
     )
   }
+
+  const id =
+    crypto.randomUUID()
 
   try {
     await env.DB
@@ -625,7 +977,7 @@ async function createAlias(
           domain_id,
           local_part,
           destination,
-          destination_type,
+          disabled_behavior,
           note,
           status,
           created_at
@@ -633,43 +985,36 @@ async function createAlias(
         VALUES (?, ?, ?, ?, ?, ?, 'active', unixepoch())
       `)
       .bind(
-        aliasId,
-        domainResult.id,
+        id,
+        domainRecord.id,
         localPart,
-        body.destinationType === 'forward'
-          ? body.destination?.trim() ?? null
-          : null,
-        body.destinationType,
+        destination,
+        disabledBehavior,
         body.note?.trim() || null,
       )
       .run()
   } catch (error) {
     console.error(
-      'Failed to save alias to D1 after creating it in MXroute',
+      'Failed to save alias in D1 after MXroute creation',
       {
-        aliasId,
-        domain,
+        id,
+        domain: domain,
         localPart,
         error,
       },
     )
 
-    // D1 failed after MXroute succeeded.
-    // Remove the MXroute forwarder so we don't leave
-    // an alias that Alias Manager doesn't know about.
-    const rollbackSucceeded = await deleteForwarder(
-      env,
-      {
+    const rollbackSucceeded =
+      await deleteForwarder(env, {
         domain,
         alias: localPart,
-      },
-    )
+      })
 
     if (!rollbackSucceeded) {
       console.error(
-        'CRITICAL: Failed to roll back MXroute alias after D1 failure',
+        'CRITICAL: MXroute alias was created but rollback failed',
         {
-          aliasId,
+          id,
           domain,
           localPart,
         },
@@ -678,7 +1023,7 @@ async function createAlias(
       return Response.json(
         {
           error:
-            'Alias could not be saved and MXroute cleanup also failed. Please check MXroute.',
+            'Alias was created in MXroute but could not be saved in Alias Manager. Please contact support.',
         },
         { status: 500 },
       )
@@ -687,7 +1032,7 @@ async function createAlias(
     return Response.json(
       {
         error:
-          'Alias already exists or could not be created',
+          'An alias with this address already exists',
       },
       { status: 409 },
     )
@@ -696,32 +1041,34 @@ async function createAlias(
   return Response.json(
     {
       success: true,
-      id: aliasId,
+      id,
     },
     { status: 201 },
   )
 }
 
-
 async function createDomain(
   env: Env,
   request: Request,
   userId: string,
-  ): Promise<Response> {
+): Promise<Response> {
   const body = await request.json<{
     domain?: string
   }>()
 
   if (!body.domain) {
     return Response.json(
-      { error: 'Domain is required' },
+      {
+        error: 'Domain is required',
+      },
       { status: 400 },
     )
   }
 
-  const domain = body.domain
-    .trim()
-    .toLowerCase()
+  const domain =
+    body.domain
+      .trim()
+      .toLowerCase()
 
   if (
     domain.length > 253 ||
@@ -732,44 +1079,54 @@ async function createDomain(
     domain.includes('..')
   ) {
     return Response.json(
-      { error: 'Invalid domain' },
+      {
+        error: 'Invalid domain',
+      },
       { status: 400 },
     )
   }
 
   if (!domain) {
     return Response.json(
-      { error: 'Domain is required' },
+      {
+        error: 'Domain is required',
+      },
       { status: 400 },
     )
   }
 
-  const mxrouteDomains = await listDomains(env)
+  const mxrouteDomains =
+    await listDomains(env)
 
   if (!mxrouteDomains) {
     return Response.json(
       {
-        error: 'Could not verify the domain with MXroute',
+        error:
+          'Could not verify the domain with MXroute',
       },
       { status: 502 },
     )
   }
 
-  const domainExists = mxrouteDomains.some(
-    (mxrouteDomain) =>
-      mxrouteDomain.toLowerCase() === domain,
-  )
+  const domainExists =
+    mxrouteDomains.some(
+      (mxrouteDomain) =>
+        mxrouteDomain.toLowerCase() ===
+        domain,
+    )
 
   if (!domainExists) {
     return Response.json(
       {
-        error: 'Domain was not found in your MXroute account',
+        error:
+          'Domain was not found in your MXroute account',
       },
       { status: 400 },
     )
   }
 
-  const domainId = crypto.randomUUID()
+  const domainId =
+    crypto.randomUUID()
 
   try {
     await env.DB
@@ -793,7 +1150,8 @@ async function createDomain(
 
     return Response.json(
       {
-        error: 'Domain already exists or could not be created',
+        error:
+          'Domain already exists or could not be created',
       },
       { status: 409 },
     )
@@ -808,11 +1166,10 @@ async function createDomain(
   )
 }
 
-
 async function getDomains(
   env: Env,
   userId: string,
- ): Promise<Response> {
+): Promise<Response> {
   const result = await env.DB
     .prepare(`
       SELECT
@@ -827,25 +1184,26 @@ async function getDomains(
     .all()
 
   return Response.json(
-    result.results.map((domain) => ({
-      id: domain.id,
-      domain: domain.domain,
-      createdAt: domain.created_at,
-    })),
+    result.results.map(
+      (domain) => ({
+        id: domain.id,
+        domain: domain.domain,
+        createdAt:
+          domain.created_at,
+      }),
+    ),
   )
 }
-
 
 async function deleteAlias(
   env: Env,
   aliasId: string,
   userId: string,
-  ): Promise<Response> {
+): Promise<Response> {
   const alias = await env.DB
     .prepare(`
       SELECT
         aliases.local_part,
-        aliases.status,
         domains.domain
       FROM aliases
       JOIN domains
@@ -853,41 +1211,47 @@ async function deleteAlias(
       WHERE aliases.id = ?
         AND domains.user_id = ?
     `)
-    .bind(aliasId, userId)
+    .bind(
+      aliasId,
+      userId,
+    )
     .first<{
       local_part: string
-      status: string
       domain: string
     }>()
 
   if (!alias) {
     return Response.json(
-      { error: 'Alias not found' },
+      {
+        error: 'Alias not found',
+      },
       { status: 404 },
     )
   }
 
-  // If the alias is active, remove it from MXroute first.
-  if (alias.status === 'active') {
-    const mxrouteDeleted = await deleteForwarder(
-      env,
-      {
-        domain: alias.domain,
-        alias: alias.local_part,
-      },
-    )
+  /*
+   * Always remove the MXroute forwarder,
+   * including disabled aliases.
+   */
+  const mxrouteDeleted =
+    await deleteForwarder(env, {
+      domain: alias.domain,
+      alias: alias.local_part,
+    })
 
-    if (!mxrouteDeleted) {
-      return Response.json(
-        {
-          error: 'Failed to delete alias from MXroute',
-        },
-        { status: 502 },
-      )
-    }
+  if (!mxrouteDeleted) {
+    return Response.json(
+      {
+        error:
+          'Failed to delete alias from MXroute',
+      },
+      { status: 502 },
+    )
   }
 
-  // Remove the alias from D1.
+  /*
+   * Remove the alias from D1.
+   */
   try {
     const result = await env.DB
       .prepare(`
@@ -899,18 +1263,22 @@ async function deleteAlias(
             WHERE user_id = ?
           )
       `)
-      .bind(aliasId, userId)
+      .bind(
+        aliasId,
+        userId,
+      )
       .run()
 
-    // D1 should report one deleted row.
     if (result.meta.changes !== 1) {
       console.error(
         'CRITICAL: MXroute alias deleted but D1 alias was not deleted',
         {
           aliasId,
           domain: alias.domain,
-          localPart: alias.local_part,
-          changes: result.meta.changes,
+          localPart:
+            alias.local_part,
+          changes:
+            result.meta.changes,
         },
       )
 
@@ -928,7 +1296,8 @@ async function deleteAlias(
       {
         aliasId,
         domain: alias.domain,
-        localPart: alias.local_part,
+        localPart:
+          alias.local_part,
         error,
       },
     )
@@ -952,60 +1321,55 @@ async function updateAlias(
   request: Request,
   aliasId: string,
   userId: string,
-  ): Promise<Response> {
+): Promise<Response> {
   const body = await request.json<{
-    destinationType?: 'forward' | 'fail' | 'blackhole'
     destination?: string
+    rejectWhenDisabled?: boolean
     note?: string
   }>()
 
-  if (!body.destinationType) {
-    return Response.json(
-      { error: 'Destination type is required' },
-      { status: 400 },
-    )
-  }
+  const destination =
+    body.destination
+      ?.trim()
+      .toLowerCase()
 
-  if (
-    body.destinationType !== 'forward' &&
-    body.destinationType !== 'fail' &&
-    body.destinationType !== 'blackhole'
-  ) {
-    return Response.json(
-      { error: 'Invalid destination type' },
-      { status: 400 },
-    )
-  }
-
-  if (
-    body.destinationType === 'forward' &&
-    !body.destination?.trim()
-  ) {
+  if (!destination) {
     return Response.json(
       {
         error:
-          'Destination email is required for forwarding aliases',
+          'Destination email is required',
+      },
+      { status: 400 },
+    )
+  }
+
+  if (!isValidEmailAddress(destination)) {
+    return Response.json(
+      {
+        error:
+          'Invalid destination email address',
       },
       { status: 400 },
     )
   }
 
   if (
-    body.destinationType === 'forward' &&
-    !isValidEmailAddress(body.destination!)
+    body.note &&
+    body.note.trim().length > 500
   ) {
     return Response.json(
-      { error: 'Invalid destination email address' },
+      {
+        error:
+          'Note must be 500 characters or less',
+      },
       { status: 400 },
     )
   }
 
-  if (body.note && body.note.trim().length > 500) {
-    return Response.json(
-      { error: 'Note must be 500 characters or less' },
-      { status: 400 },
-    )
-  }
+  const newDisabledBehavior =
+    body.rejectWhenDisabled
+      ? 'reject'
+      : 'blackhole'
 
   const alias = await env.DB
     .prepare(`
@@ -1013,7 +1377,7 @@ async function updateAlias(
         aliases.id,
         aliases.local_part,
         aliases.destination,
-        aliases.destination_type,
+        aliases.disabled_behavior,
         aliases.note,
         aliases.status,
         domains.domain
@@ -1023,65 +1387,303 @@ async function updateAlias(
       WHERE aliases.id = ?
         AND domains.user_id = ?
     `)
-    .bind(aliasId, userId)
+    .bind(
+      aliasId,
+      userId,
+    )
     .first<{
       id: string
       local_part: string
       destination: string | null
-      destination_type: 'forward' | 'fail' | 'blackhole'
+      disabled_behavior:
+        | 'blackhole'
+        | 'reject'
       note: string | null
-      status: 'active' | 'disabled'
+      status:
+        | 'active'
+        | 'disabled'
       domain: string
     }>()
 
   if (!alias) {
     return Response.json(
-      { error: 'Alias not found' },
+      {
+        error: 'Alias not found',
+      },
       { status: 404 },
     )
   }
 
-  const newDestination =
-    body.destinationType === 'forward'
-      ? body.destination!.trim()
-      : null
+  const newNote =
+    body.note?.trim() || null
 
-  const newNote = body.note?.trim() || null
-
-
-
-  // If the alias is disabled, MXroute has no active forwarder.
-  // We only need to update D1.
+  /*
+   * DISABLED ALIAS
+   *
+   * Destination changes are stored in D1.
+   * MXroute only needs changing if the
+   * disabled behavior changes.
+   */
   if (alias.status === 'disabled') {
-    await env.DB
-      .prepare(`
-        UPDATE aliases
-        SET
-          destination = ?,
-          destination_type = ?,
-          note = ?
-        WHERE id = ?
-      `)
-      .bind(
-        newDestination,
-        body.destinationType,
-        newNote,
-        aliasId,
-      )
-      .run()
+    const disabledBehaviorChanged =
+      alias.disabled_behavior !==
+      newDisabledBehavior
 
-    return Response.json({ success: true })
+    if (!disabledBehaviorChanged) {
+      try {
+        const result = await env.DB
+          .prepare(`
+            UPDATE aliases
+            SET
+              destination = ?,
+              disabled_behavior = ?,
+              note = ?
+            WHERE id = ?
+              AND domain_id IN (
+                SELECT id
+                FROM domains
+                WHERE user_id = ?
+              )
+          `)
+          .bind(
+            destination,
+            newDisabledBehavior,
+            newNote,
+            aliasId,
+            userId,
+          )
+          .run()
+
+        if (result.meta.changes !== 1) {
+          throw new Error(
+            `Expected 1 D1 update, got ${result.meta.changes}`,
+          )
+        }
+      } catch (error) {
+        console.error(
+          'Failed to update disabled alias in D1',
+          {
+            aliasId,
+            error,
+          },
+        )
+
+        return Response.json(
+          {
+            error:
+              'Could not update the alias. Please try again.',
+          },
+          { status: 500 },
+        )
+      }
+
+      return Response.json({
+        success: true,
+      })
+    }
+
+    /*
+     * Disabled behavior changed.
+     *
+     * Replace the MXroute disabled
+     * configuration.
+     */
+    const mxrouteDeleted =
+      await deleteForwarder(env, {
+        domain: alias.domain,
+        alias: alias.local_part,
+      })
+
+    if (!mxrouteDeleted) {
+      return Response.json(
+        {
+          error:
+            'Failed to update the disabled alias in MXroute',
+        },
+        { status: 502 },
+      )
+    }
+
+    const mxrouteCreated =
+      await createDisabledForwarder(
+        env,
+        {
+          domain: alias.domain,
+          alias: alias.local_part,
+          behavior:
+            newDisabledBehavior,
+        },
+      )
+
+    if (!mxrouteCreated) {
+      /*
+       * Restore the previous disabled
+       * configuration.
+       */
+      const restored =
+        await createDisabledForwarder(
+          env,
+          {
+            domain: alias.domain,
+            alias: alias.local_part,
+            behavior:
+              alias.disabled_behavior,
+          },
+        )
+
+      if (!restored) {
+        console.error(
+          'CRITICAL: Failed to update disabled alias and failed to restore previous MXroute configuration',
+          {
+            aliasId,
+            domain: alias.domain,
+            localPart:
+              alias.local_part,
+          },
+        )
+      }
+
+      return Response.json(
+        {
+          error:
+            'Failed to apply the new disabled behavior',
+        },
+        { status: 502 },
+      )
+    }
+
+    /*
+     * MXroute is correct.
+     * Update D1.
+     */
+    try {
+      const result = await env.DB
+        .prepare(`
+          UPDATE aliases
+          SET
+            destination = ?,
+            disabled_behavior = ?,
+            note = ?
+          WHERE id = ?
+            AND domain_id IN (
+              SELECT id
+              FROM domains
+              WHERE user_id = ?
+            )
+        `)
+        .bind(
+          destination,
+          newDisabledBehavior,
+          newNote,
+          aliasId,
+          userId,
+        )
+        .run()
+
+      if (result.meta.changes !== 1) {
+        throw new Error(
+          `Expected 1 D1 update, got ${result.meta.changes}`,
+        )
+      }
+    } catch (error) {
+      console.error(
+        'CRITICAL: Disabled MXroute behavior was updated but D1 update failed',
+        {
+          aliasId,
+          domain: alias.domain,
+          localPart:
+            alias.local_part,
+          error,
+        },
+      )
+
+      /*
+       * Restore the old disabled
+       * configuration.
+       */
+      const deletedNewConfig =
+        await deleteForwarder(env, {
+          domain: alias.domain,
+          alias: alias.local_part,
+        })
+
+      if (deletedNewConfig) {
+        const restored =
+          await createDisabledForwarder(
+            env,
+            {
+              domain: alias.domain,
+              alias: alias.local_part,
+              behavior:
+                alias.disabled_behavior,
+            },
+          )
+
+        if (!restored) {
+          console.error(
+            'CRITICAL: Failed to restore previous disabled MXroute configuration after D1 failure',
+            {
+              aliasId,
+              domain: alias.domain,
+              localPart:
+                alias.local_part,
+            },
+          )
+        }
+      } else {
+        console.error(
+          'CRITICAL: Failed to remove new disabled MXroute configuration after D1 failure',
+          {
+            aliasId,
+            domain: alias.domain,
+            localPart:
+              alias.local_part,
+          },
+        )
+      }
+
+      return Response.json(
+        {
+          error:
+            'Alias could not be updated completely. Please contact support.',
+        },
+        { status: 500 },
+      )
+    }
+
+    return Response.json({
+      success: true,
+    })
   }
 
-  // Active alias:
-  // Delete the old MXroute configuration first.
-  const mxrouteDeleted = await deleteForwarder(
-    env,
-    {
+  /*
+   * ACTIVE ALIAS
+   *
+   * MXroute currently forwards to the
+   * saved destination.
+   *
+   * Delete old configuration →
+   * create new configuration →
+   * update D1.
+   */
+  if (!alias.destination) {
+    return Response.json(
+      {
+        error:
+          'This alias does not have a destination email and cannot be updated.',
+      },
+      { status: 409 },
+    )
+  }
+
+  const oldDestination =
+    alias.destination
+
+  const mxrouteDeleted =
+    await deleteForwarder(env, {
       domain: alias.domain,
       alias: alias.local_part,
-    },
-  )
+    })
 
   if (!mxrouteDeleted) {
     return Response.json(
@@ -1093,36 +1695,38 @@ async function updateAlias(
     )
   }
 
-  // Create the new MXroute configuration.
-  const mxrouteCreated = await createForwarder(
-    env,
-    {
+  /*
+   * Create the new forwarding
+   * configuration.
+   */
+  const mxrouteCreated =
+    await createForwarder(env, {
       domain: alias.domain,
       alias: alias.local_part,
-      destinationType: body.destinationType,
-      destination: newDestination ?? undefined,
-    },
-  )
+      destination,
+    })
 
   if (!mxrouteCreated) {
-    // Try to restore the previous configuration.
-    const restored = await createForwarder(
-      env,
-      {
+    /*
+     * Restore the previous forwarding
+     * configuration.
+     */
+    const restored =
+      await createForwarder(env, {
         domain: alias.domain,
         alias: alias.local_part,
-        destinationType: alias.destination_type,
-        destination: alias.destination ?? undefined,
-      },
-    )
+        destination:
+          oldDestination,
+      })
 
     if (!restored) {
       console.error(
-        'CRITICAL: Failed to restore alias after update failure',
+        'CRITICAL: Failed to update alias and failed to restore previous MXroute forwarding configuration',
         {
           aliasId,
           domain: alias.domain,
-          localPart: alias.local_part,
+          localPart:
+            alias.local_part,
         },
       )
     }
@@ -1136,32 +1740,113 @@ async function updateAlias(
     )
   }
 
-  // MXroute is now correct, so update D1.
-  await env.DB
-    .prepare(`
-      UPDATE aliases
-      SET
-        destination = ?,
-        destination_type = ?,
-        note = ?
-      WHERE id = ?
-    `)
-    .bind(
-      newDestination,
-      body.destinationType,
-      newNote,
-      aliasId,
-    )
-    .run()
+  /*
+   * MXroute is now correct.
+   * Update D1.
+   */
+  try {
+    const result = await env.DB
+      .prepare(`
+        UPDATE aliases
+        SET
+          destination = ?,
+          disabled_behavior = ?,
+          note = ?
+        WHERE id = ?
+          AND domain_id IN (
+            SELECT id
+            FROM domains
+            WHERE user_id = ?
+          )
+      `)
+      .bind(
+        destination,
+        newDisabledBehavior,
+        newNote,
+        aliasId,
+        userId,
+      )
+      .run()
 
-  return Response.json({ success: true })
+    if (result.meta.changes !== 1) {
+      throw new Error(
+        `Expected 1 D1 update, got ${result.meta.changes}`,
+      )
+    }
+  } catch (error) {
+    console.error(
+      'CRITICAL: Alias was updated in MXroute but D1 update failed',
+      {
+        aliasId,
+        domain: alias.domain,
+        localPart:
+          alias.local_part,
+        error,
+      },
+    )
+
+    /*
+     * D1 still contains the old state,
+     * so restore the old MXroute
+     * forwarding configuration.
+     */
+    const deletedNewConfig =
+      await deleteForwarder(env, {
+        domain: alias.domain,
+        alias: alias.local_part,
+      })
+
+    if (deletedNewConfig) {
+      const restored =
+        await createForwarder(env, {
+          domain: alias.domain,
+          alias: alias.local_part,
+          destination:
+            oldDestination,
+        })
+
+      if (!restored) {
+        console.error(
+          'CRITICAL: Failed to restore previous MXroute forwarding configuration after D1 failure',
+          {
+            aliasId,
+            domain: alias.domain,
+            localPart:
+              alias.local_part,
+          },
+        )
+      }
+    } else {
+      console.error(
+        'CRITICAL: Failed to remove new MXroute forwarding configuration after D1 failure',
+        {
+          aliasId,
+          domain: alias.domain,
+          localPart:
+            alias.local_part,
+        },
+      )
+    }
+
+    return Response.json(
+      {
+        error:
+          'Alias could not be updated completely. Please contact support.',
+      },
+      { status: 500 },
+    )
+  }
+
+  return Response.json({
+    success: true,
+  })
 }
 
 async function deleteDomain(
   env: Env,
   domainId: string,
   userId: string,
- ): Promise<Response> {
+): Promise<Response> {
   const domain = await env.DB
     .prepare(`
       SELECT
@@ -1171,7 +1856,10 @@ async function deleteDomain(
       WHERE id = ?
         AND user_id = ?
     `)
-    .bind(domainId, userId)
+    .bind(
+      domainId,
+      userId,
+    )
     .first<{
       id: string
       domain: string
@@ -1179,23 +1867,29 @@ async function deleteDomain(
 
   if (!domain) {
     return Response.json(
-      { error: 'Domain not found' },
+      {
+        error: 'Domain not found',
+      },
       { status: 404 },
     )
   }
 
-  const aliasCount = await env.DB
-    .prepare(`
-      SELECT COUNT(*) AS count
-      FROM aliases
-      WHERE domain_id = ?
-    `)
-    .bind(domainId)
-    .first<{
-      count: number
-    }>()
+  const aliasCount =
+    await env.DB
+      .prepare(`
+        SELECT COUNT(*) AS count
+        FROM aliases
+        WHERE domain_id = ?
+      `)
+      .bind(domainId)
+      .first<{
+        count: number
+      }>()
 
-  if (aliasCount && aliasCount.count > 0) {
+  if (
+    aliasCount &&
+    aliasCount.count > 0
+  ) {
     return Response.json(
       {
         error: `Cannot delete domain while it has ${aliasCount.count} alias${aliasCount.count === 1 ? '' : 'es'}`,
@@ -1210,7 +1904,10 @@ async function deleteDomain(
       WHERE id = ?
         AND user_id = ?
     `)
-    .bind(domainId, userId)
+    .bind(
+      domainId,
+      userId,
+    )
     .run()
 
   return Response.json({

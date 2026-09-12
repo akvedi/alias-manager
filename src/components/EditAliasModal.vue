@@ -3,14 +3,12 @@ import { ref } from 'vue'
 
 import DestinationPicker from '@/components/DestinationPicker.vue'
 
-type DestinationType = 'forward' | 'fail' | 'blackhole'
-
 const props = defineProps<{
   alias: {
     id: string
     address: string
     destination: string | null
-    destinationType: DestinationType
+    disabledBehavior: 'blackhole' | 'reject'
     note: string | null
   }
 }>()
@@ -20,12 +18,12 @@ const emit = defineEmits<{
   saved: []
 }>()
 
-const destinationType = ref<DestinationType>(
-  props.alias.destinationType,
-)
-
 const destination = ref(
   props.alias.destination ?? '',
+)
+
+const rejectWhenDisabled = ref(
+  props.alias.disabledBehavior === 'reject',
 )
 
 const note = ref(props.alias.note ?? '')
@@ -34,11 +32,13 @@ const saving = ref(false)
 const error = ref('')
 
 async function saveChanges() {
-  if (
-    destinationType.value === 'forward' &&
-    !destination.value
-  ) {
+  if (!destination.value.trim()) {
     error.value = 'Please select a destination email.'
+    return
+  }
+
+  if (note.value.length > 500) {
+    error.value = 'Note must be 500 characters or less.'
     return
   }
 
@@ -54,12 +54,10 @@ async function saveChanges() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          destinationType: destinationType.value,
-          destination:
-            destinationType.value === 'forward'
-              ? destination.value
-              : undefined,
-          note: note.value,
+          destination: destination.value.trim(),
+          rejectWhenDisabled:
+            rejectWhenDisabled.value,
+          note: note.value.trim(),
         }),
       },
     )
@@ -87,7 +85,7 @@ async function saveChanges() {
 <template>
   <div
     class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4 py-6 backdrop-blur-sm"
-    @click.self="emit('close')"
+    @click.self="!saving && emit('close')"
   >
     <div
       class="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white shadow-2xl shadow-slate-950/20"
@@ -107,13 +105,15 @@ async function saveChanges() {
             </h2>
 
             <p class="mt-1 text-sm text-slate-500">
-              Update how this alias handles incoming email.
+              Update where this alias forwards email and what
+              happens when it is disabled.
             </p>
           </div>
 
           <button
             type="button"
-            class="rounded-lg p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+            :disabled="saving"
+            class="rounded-lg p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
             aria-label="Close"
             @click="emit('close')"
           >
@@ -204,9 +204,48 @@ async function saveChanges() {
 
         <!-- Destination -->
         <DestinationPicker
-          v-model:destination-type="destinationType"
           v-model:destination="destination"
         />
+
+        <p class="-mt-3 text-xs text-slate-400">
+          Email will be forwarded here when the alias is enabled.
+        </p>
+
+        <!-- Disabled behavior -->
+        <div
+          class="rounded-xl border border-slate-200 bg-slate-50 p-4"
+        >
+          <label
+            class="flex cursor-pointer items-start gap-3"
+            :class="
+              saving
+                ? 'cursor-not-allowed opacity-60'
+                : ''
+            "
+          >
+            <input
+              v-model="rejectWhenDisabled"
+              type="checkbox"
+              :disabled="saving"
+              class="mt-0.5 h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-2 focus:ring-indigo-500/20 disabled:cursor-not-allowed"
+            />
+
+            <span>
+              <span
+                class="block text-sm font-medium text-slate-800"
+              >
+                Reject messages when this alias is disabled
+              </span>
+
+              <span
+                class="mt-1 block text-xs leading-5 text-slate-500"
+              >
+                When disabled, reject incoming messages instead
+                of silently discarding them.
+              </span>
+            </span>
+          </label>
+        </div>
 
         <!-- Note -->
         <div>
@@ -229,9 +268,15 @@ async function saveChanges() {
             class="w-full resize-none rounded-lg border border-slate-300 px-3 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
           />
 
-          <p class="mt-1.5 text-xs text-slate-400">
-            This note is stored only in Alias Manager.
-          </p>
+          <div class="mt-1.5 flex items-center justify-between">
+            <p class="text-xs text-slate-400">
+              This note is stored only in Alias Manager.
+            </p>
+
+            <span class="text-xs text-slate-400">
+              {{ note.length }}/500
+            </span>
+          </div>
         </div>
       </div>
 
@@ -250,10 +295,7 @@ async function saveChanges() {
 
         <button
           type="button"
-          :disabled="
-            saving ||
-            (destinationType === 'forward' && !destination)
-          "
+          :disabled="saving || !destination.trim()"
           class="rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
           @click="saveChanges"
         >

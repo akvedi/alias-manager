@@ -20,6 +20,11 @@ const navigation = [
     to: '/settings',
     icon: 'settings',
   },
+  {
+    name: 'Destinations',
+    to: '/destinations',
+    icon: 'mail',
+  },
 ]
 </script>
 
@@ -65,7 +70,10 @@ const navigation = [
           active-class="bg-indigo-500/10 text-indigo-400 ring-1 ring-inset ring-indigo-500/20"
           :class="{
             'text-slate-400 hover:bg-slate-900 hover:text-slate-100':
-              $route.path !== item.to,
+              !(
+                $route.path === item.to ||
+                $route.path.startsWith(`${item.to}/`)
+              ),
           }"
         >
           <!-- Dashboard icon -->
@@ -112,6 +120,26 @@ const navigation = [
             <path
               stroke-linecap="round"
               d="M3 12h18M12 3c2.5 2.4 3.5 5.4 3.5 9s-1 6.6-3.5 9c-2.5-2.4-3.5-5.4-3.5-9s1-6.6 3.5-9Z"
+            />
+          </svg>
+
+          <!-- Mail icon -->
+          <svg v-else-if="item.icon === 'mail'"
+            class="h-5 w-5"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="M3 6.5A2.5 2.5 0 0 1 5.5 4h13A2.5 2.5 0 0 1 21 6.5v11a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5v-11Z"
+            />
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="m5 7 7 5 7-5"
             />
           </svg>
 

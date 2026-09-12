@@ -1,16 +1,15 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+
 import CreateAliasModal from '@/components/CreateAliasModal.vue'
 import ConfirmModal from '@/components/ConfirmModal.vue'
 import EditAliasModal from '@/components/EditAliasModal.vue'
-
-type DestinationType = 'forward' | 'fail' | 'blackhole'
 
 interface Alias {
   id: string
   address: string
   destination: string | null
-  destinationType: DestinationType
+  disabledBehavior: 'blackhole' | 'reject'
   note: string | null
   enabled: boolean
   createdAt: number
@@ -21,16 +20,17 @@ const aliases = ref<Alias[]>([])
 const searchQuery = ref('')
 const domainFilter = ref('all')
 const statusFilter = ref('all')
-const typeFilter = ref('all')
 const sortBy = ref('newest')
 
 const domains = computed(() => {
   const uniqueDomains = new Set(
-    aliases.value.map((alias) => alias.address.split('@')[1]),
+    aliases.value.map(
+      (alias) => alias.address.split('@')[1],
+    ),
   )
 
   return Array.from(uniqueDomains).sort((a, b) =>
-    a.localeCompare(b),
+    (a ?? '').localeCompare(b ?? ''),
   )
 })
 
@@ -38,7 +38,8 @@ const filteredAliases = computed(() => {
   const query = searchQuery.value.trim().toLowerCase()
 
   const result = aliases.value.filter((alias) => {
-    const [localPart, domain] = alias.address.split('@')
+    const [localPart = '', domain = ''] =
+      alias.address.split('@')
 
     const matchesSearch =
       !query ||
@@ -57,15 +58,10 @@ const filteredAliases = computed(() => {
       (statusFilter.value === 'active' && alias.enabled) ||
       (statusFilter.value === 'disabled' && !alias.enabled)
 
-    const matchesType =
-      typeFilter.value === 'all' ||
-      alias.destinationType === typeFilter.value
-
     return (
       matchesSearch &&
       matchesDomain &&
-      matchesStatus &&
-      matchesType
+      matchesStatus
     )
   })
 
@@ -91,14 +87,18 @@ const loading = ref(true)
 const actionId = ref<string | null>(null)
 const aliasPendingDeletion = ref<Alias | null>(null)
 const aliasPendingEdit = ref<Alias | null>(null)
+
 const error = ref('')
 const createAliasError = ref('')
 const creatingAlias = ref(false)
 
 function editAlias(alias: Alias) {
+  if (actionId.value === alias.id) {
+    return
+  }
+
   aliasPendingEdit.value = alias
 }
-
 
 async function aliasSaved() {
   aliasPendingEdit.value = null
@@ -118,7 +118,8 @@ async function loadAliases() {
 
     aliases.value = await response.json()
   } catch {
-    error.value = 'Could not load your aliases. Please try again.'
+    error.value =
+      'Could not load your aliases. Please try again.'
   } finally {
     loading.value = false
   }
@@ -129,12 +130,14 @@ onMounted(() => {
 })
 
 async function toggleAlias(alias: Alias) {
-  const action = alias.enabled ? 'disable' : 'enable'
-
   actionId.value = alias.id
   error.value = ''
 
   try {
+    const action = alias.enabled
+      ? 'disable'
+      : 'enable'
+
     const response = await fetch(
       `/api/aliases/${alias.id}/${action}`,
       {
@@ -142,26 +145,44 @@ async function toggleAlias(alias: Alias) {
       },
     )
 
-    if (!response.ok) {
-      const result = await response.json().catch(() => null)
+    const data = await response.json().catch(() => null)
 
+    if (!response.ok) {
       throw new Error(
-        result?.error ?? `Failed to ${action} alias`,
+        data?.error || `Failed to ${action} alias`,
       )
     }
 
-    await loadAliases()
+    // Update only this alias locally.
+    const index = aliases.value.findIndex(
+      (item) => item.id === alias.id,
+    )
+
+    if (index !== -1) {
+      const existingAlias = aliases.value[index]
+
+      if (existingAlias) {
+        aliases.value[index] = {
+          ...existingAlias,
+          enabled: !existingAlias.enabled,
+        }
+      }
+    }
   } catch (err) {
     error.value =
       err instanceof Error
         ? err.message
-        : `Failed to ${action} alias`
+        : 'Something went wrong'
   } finally {
     actionId.value = null
   }
 }
 
 function requestDeleteAlias(alias: Alias) {
+  if (actionId.value === alias.id) {
+    return
+  }
+
   aliasPendingDeletion.value = alias
 }
 
@@ -177,7 +198,9 @@ async function deleteAlias(alias: Alias) {
       },
     )
 
-    const result = await response.json().catch(() => null)
+    const result = await response
+      .json()
+      .catch(() => null)
 
     if (!response.ok) {
       throw new Error(
@@ -185,7 +208,10 @@ async function deleteAlias(alias: Alias) {
       )
     }
 
-    await loadAliases()
+    // Remove only this alias locally.
+    aliases.value = aliases.value.filter(
+      (item) => item.id !== alias.id,
+    )
   } catch (err) {
     error.value =
       err instanceof Error
@@ -198,13 +224,14 @@ async function deleteAlias(alias: Alias) {
 }
 
 function openCreateModal() {
+  createAliasError.value = ''
   showCreateModal.value = true
 }
 
 async function createAlias(
   address: string,
-  destinationType: 'forward' | 'fail' | 'blackhole',
   destination: string,
+  rejectWhenDisabled: boolean,
   note: string,
 ) {
   error.value = ''
@@ -219,11 +246,8 @@ async function createAlias(
       },
       body: JSON.stringify({
         address,
-        destinationType,
-        destination:
-          destinationType === 'forward'
-            ? destination
-            : undefined,
+        destination,
+        rejectWhenDisabled,
         note,
       }),
     })
@@ -249,18 +273,6 @@ async function createAlias(
     creatingAlias.value = false
   }
 }
-
-function getDestinationLabel(alias: Alias) {
-  if (alias.destinationType === 'fail') {
-    return 'Reject'
-  }
-
-  if (alias.destinationType === 'blackhole') {
-    return 'Blackhole'
-  }
-
-  return 'Forward'
-}
 </script>
 
 <template>
@@ -271,412 +283,485 @@ function getDestinationLabel(alias: Alias) {
     >
       <div>
         <div class="flex items-center gap-3">
-          <h1 class="text-2xl font-semibold tracking-tight text-slate-900">
+          <h1
+            class="text-2xl font-semibold tracking-tight text-slate-900"
+          >
             Aliases
           </h1>
-      <span
-        v-if="!loading"
-        class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600"
+
+          <span
+            v-if="!loading"
+            class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600"
+          >
+            {{ aliases.length }}
+          </span>
+        </div>
+
+        <p class="mt-1 text-sm text-slate-500">
+          Create and manage your email aliases.
+        </p>
+      </div>
+
+      <button
+        type="button"
+        class="inline-flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-indigo-600/20 transition hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+        @click="openCreateModal"
       >
-        {{ aliases.length }}
-      </span>
-    </div>
-
-    <p class="mt-1 text-sm text-slate-500">
-      Create and manage your email aliases.
-    </p>
-  </div>
-
-  <button
-    class="inline-flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-indigo-600/20 transition hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
-    @click="openCreateModal"
-  >
-    <svg
-      class="h-4 w-4"
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke="currentColor"
-      stroke-width="2"
-    >
-      <path
-        stroke-linecap="round"
-        d="M12 5v14M5 12h14"
-      />
-    </svg>
-
-    Create alias
-  </button>
-</div>
-
-<!-- Error -->
-<div
-  v-if="error"
-  class="mb-6 flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
->
-  <svg
-    class="mt-0.5 h-5 w-5 shrink-0"
-    fill="none"
-    viewBox="0 0 24 24"
-    stroke="currentColor"
-    stroke-width="2"
-  >
-    <circle cx="12" cy="12" r="9" />
-    <path
-      stroke-linecap="round"
-      d="M12 8v4M12 16h.01"
-    />
-  </svg>
-
-  <span>{{ error }}</span>
-</div>
-
-<!-- Loading -->
-<div
-  v-if="loading"
-  class="space-y-3"
->
-  <div
-    v-for="item in 3"
-    :key="item"
-    class="h-24 animate-pulse rounded-xl border border-slate-200 bg-slate-100"
-  />
-</div>
-
-<!-- Empty state -->
-<div
-  v-else-if="aliases.length === 0"
-  class="rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-16 text-center"
->
-  <div
-    class="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600"
-  >
-    <svg
-      class="h-6 w-6"
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke="currentColor"
-      stroke-width="1.8"
-    >
-      <path
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        d="M8 7h8m-8 4h5m-9 9 3-3h10a3 3 0 0 0 3-3V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v10l-2 3h1Z"
-      />
-    </svg>
-  </div>
-
-  <h2 class="mt-4 text-base font-semibold text-slate-900">
-    No aliases yet
-  </h2>
-
-  <p class="mx-auto mt-1 max-w-sm text-sm leading-6 text-slate-500">
-    Create your first alias to start managing your email addresses.
-  </p>
-
-  <button
-    class="mt-6 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-700"
-    @click="openCreateModal"
-  >
-    Create your first alias
-  </button>
-</div>
-
-<!-- Alias list -->
-<div
-  v-else
-  class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
->
-  <!-- Filters -->
-  <div class="border-b border-slate-200 bg-slate-50/50 px-5 py-4 sm:px-6">
-    <div class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto_auto_auto]">
-      <!-- Search -->
-      <div class="relative">
         <svg
-          class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
+          class="h-4 w-4"
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"
           stroke-width="2"
         >
-          <circle cx="11" cy="11" r="7" />
           <path
             stroke-linecap="round"
-            d="m20 20-4-4"
+            d="M12 5v14M5 12h14"
           />
         </svg>
 
-        <input
-          v-model="searchQuery"
-          type="search"
-          placeholder="Search aliases..."
-          class="w-full rounded-lg border border-slate-300 bg-white py-2.5 pl-9 pr-3 text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
-        />
-      </div>
-
-      <!-- Domain -->
-      <select
-        v-model="domainFilter"
-        class="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
-      >
-        <option value="all">All domains</option>
-
-        <option
-          v-for="domain in domains"
-          :key="domain"
-          :value="domain"
-        >
-          {{ domain }}
-        </option>
-      </select>
-
-      <!-- Status -->
-      <select
-        v-model="statusFilter"
-        class="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
-      >
-        <option value="all">All statuses</option>
-        <option value="active">Active</option>
-        <option value="disabled">Disabled</option>
-      </select>
-
-      <!-- Type -->
-      <select
-        v-model="typeFilter"
-        class="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
-      >
-        <option value="all">All types</option>
-        <option value="forward">Forward</option>
-        <option value="fail">Reject</option>
-        <option value="blackhole">Blackhole</option>
-      </select>
+        Create alias
+      </button>
     </div>
 
-    <div class="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-      <p class="text-xs text-slate-500">
-        Showing
-        <span class="font-semibold text-slate-700">
-          {{ filteredAliases.length }}
-        </span>
-        of
-        <span class="font-semibold text-slate-700">
-          {{ aliases.length }}
-        </span>
-        aliases
-      </p>
-
-      <select
-        v-model="sortBy"
-        class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 sm:w-auto"
-      >
-        <option value="newest">Newest first</option>
-        <option value="oldest">Oldest first</option>
-        <option value="address-asc">Address A–Z</option>
-        <option value="address-desc">Address Z–A</option>
-      </select>
-    </div>
-  </div>
-
-  <!-- Column header -->
-  <div
-    class="hidden grid-cols-[minmax(0,1fr)_auto] gap-6 border-b border-slate-100 bg-slate-50/70 px-6 py-3 text-xs font-semibold uppercase tracking-wider text-slate-500 sm:grid"
-  >
-    <span>Alias</span>
-    <span>Actions</span>
-  </div>
-
-  <div
-    v-if="filteredAliases.length === 0"
-    class="px-6 py-12 text-center"
-  >
+    <!-- Error -->
     <div
-      class="mx-auto flex h-11 w-11 items-center justify-center rounded-xl bg-slate-100 text-slate-400"
+      v-if="error"
+      class="mb-6 flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
     >
       <svg
-        class="h-5 w-5"
+        class="mt-0.5 h-5 w-5 shrink-0"
         fill="none"
         viewBox="0 0 24 24"
         stroke="currentColor"
-        stroke-width="1.8"
+        stroke-width="2"
       >
-        <circle cx="11" cy="11" r="7" />
+        <circle
+          cx="12"
+          cy="12"
+          r="9"
+        />
+
         <path
           stroke-linecap="round"
-          d="m20 20-4-4"
+          d="M12 8v4M12 16h.01"
         />
       </svg>
+
+      <span>{{ error }}</span>
     </div>
 
-    <p class="mt-4 text-sm font-semibold text-slate-700">
-      No matching aliases
-    </p>
-
-    <p class="mt-1 text-sm text-slate-500">
-      Try changing your search or filters.
-    </p>
-  </div>
-
-  <div
-    v-else
-    class="divide-y divide-slate-100"
-  >
-  </div>
-  <div class="divide-y divide-slate-100">
+    <!-- Loading -->
     <div
-      v-for="alias in filteredAliases"
-      :key="alias.id"
-      class="flex flex-col gap-4 px-5 py-5 transition hover:bg-slate-50/60 sm:grid sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:gap-6 sm:px-6"
+      v-if="loading"
+      class="space-y-3"
     >
-      <!-- Alias information -->
-      <div class="min-w-0">
-        <div class="flex items-center gap-3">
-          <div
-            class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-sm font-semibold text-slate-600"
+      <div
+        v-for="item in 3"
+        :key="item"
+        class="h-24 animate-pulse rounded-xl border border-slate-200 bg-slate-100"
+      />
+    </div>
+
+    <!-- Empty state -->
+    <div
+      v-else-if="aliases.length === 0"
+      class="rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-16 text-center"
+    >
+      <div
+        class="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600"
+      >
+        <svg
+          class="h-6 w-6"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          stroke-width="1.8"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            d="M8 7h8m-8 4h5m-9 9 3-3h10a3 3 0 0 0 3-3V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v10l-2 3h1Z"
+          />
+        </svg>
+      </div>
+
+      <h2
+        class="mt-4 text-base font-semibold text-slate-900"
+      >
+        No aliases yet
+      </h2>
+
+      <p
+        class="mx-auto mt-1 max-w-sm text-sm leading-6 text-slate-500"
+      >
+        Create your first alias to start managing your email
+        addresses.
+      </p>
+
+      <button
+        type="button"
+        class="mt-6 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-700"
+        @click="openCreateModal"
+      >
+        Create your first alias
+      </button>
+    </div>
+
+    <!-- Alias list -->
+    <div
+      v-else
+      class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
+    >
+      <!-- Filters -->
+      <div
+        class="border-b border-slate-200 bg-slate-50/50 px-5 py-4 sm:px-6"
+      >
+        <div
+          class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto_auto]"
+        >
+          <!-- Search -->
+          <div class="relative">
+            <svg
+              class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <circle
+                cx="11"
+                cy="11"
+                r="7"
+              />
+
+              <path
+                stroke-linecap="round"
+                d="m20 20-4-4"
+              />
+            </svg>
+
+            <input
+              v-model="searchQuery"
+              type="search"
+              placeholder="Search aliases..."
+              class="w-full rounded-lg border border-slate-300 bg-white py-2.5 pl-9 pr-3 text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+            />
+          </div>
+
+          <!-- Domain -->
+          <select
+            v-model="domainFilter"
+            class="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
           >
-            @
-          </div>
+            <option value="all">
+              All domains
+            </option>
 
-          <div class="min-w-0">
-            <p class="truncate text-sm font-semibold text-slate-900">
-              {{ alias.address }}
-
-              <span
-                class="ml-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ring-inset"
-                :class="
-                  alias.destinationType === 'fail'
-                    ? 'bg-amber-50 text-amber-700 ring-amber-200'
-                    : alias.destinationType === 'blackhole'
-                      ? 'bg-slate-50 text-slate-700 ring-slate-200'
-                      : 'bg-green-50 text-green-900 ring-green-200'
-                "
-              >
-                {{ getDestinationLabel(alias) }}
-              </span>
-            </p>
-
-            <!-- Forward destination -->
-            <p
-              v-if="alias.destinationType === 'forward' && alias.destination"
-              class="mt-1 truncate text-sm text-slate-600"
+            <option
+              v-for="domain in domains"
+              :key="domain"
+              :value="domain"
             >
-              {{ alias.destination }}
-            </p>
+              {{ domain }}
+            </option>
+          </select>
 
-            <!-- Reject -->
-            <p
-              v-else-if="alias.destinationType === 'fail'"
-              class="mt-1 text-sm text-amber-600"
-            >
-              Incoming mail will be rejected
-            </p>
+          <!-- Status -->
+          <select
+            v-model="statusFilter"
+            class="rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+          >
+            <option value="all">
+              All statuses
+            </option>
 
-            <!-- Blackhole -->
-            <p
-              v-else-if="alias.destinationType === 'blackhole'"
-              class="mt-1 text-sm text-slate-500"
-            >
-              Incoming mail will be silently discarded
-            </p>
+            <option value="active">
+              Active
+            </option>
 
-            <!-- Note -->
-            <p
-              v-if="alias.note"
-              class="mt-2 max-w-xl truncate text-xs italic text-slate-500"
-              :title="alias.note"
+            <option value="disabled">
+              Disabled
+            </option>
+          </select>
+        </div>
+
+        <div
+          class="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
+        >
+          <p class="text-xs text-slate-500">
+            Showing
+            <span
+              class="font-semibold text-slate-700"
             >
-              {{ alias.note }}
-            </p>
-          </div>
+              {{ filteredAliases.length }}
+            </span>
+            of
+            <span
+              class="font-semibold text-slate-700"
+            >
+              {{ aliases.length }}
+            </span>
+            aliases
+          </p>
+
+          <select
+            v-model="sortBy"
+            class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 sm:w-auto"
+          >
+            <option value="newest">
+              Newest first
+            </option>
+
+            <option value="oldest">
+              Oldest first
+            </option>
+
+            <option value="address-asc">
+              Address A–Z
+            </option>
+
+            <option value="address-desc">
+              Address Z–A
+            </option>
+          </select>
         </div>
       </div>
 
-      <!-- Actions -->
-      <div class="flex items-center justify-between gap-3 sm:justify-end">
-        <span
-          class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold"
-          :class="
-            alias.enabled
-              ? 'bg-emerald-50 text-emerald-700'
-              : 'bg-slate-100 text-slate-600'
-          "
+      <!-- Column header -->
+      <div
+        class="hidden grid-cols-[minmax(0,1fr)_auto] gap-6 border-b border-slate-100 bg-slate-50/70 px-6 py-3 text-xs font-semibold uppercase tracking-wider text-slate-500 sm:grid"
+      >
+        <span>Alias</span>
+        <span>Actions</span>
+      </div>
+
+      <!-- No filtered results -->
+      <div
+        v-if="filteredAliases.length === 0"
+        class="px-6 py-12 text-center"
+      >
+        <div
+          class="mx-auto flex h-11 w-11 items-center justify-center rounded-xl bg-slate-100 text-slate-400"
         >
-          <span
-            class="h-1.5 w-1.5 rounded-full"
-            :class="
-              alias.enabled
-                ? 'bg-emerald-500'
-                : 'bg-slate-400'
-            "
-          />
-
-          {{ alias.enabled ? 'Active' : 'Disabled' }}
-        </span>
-
-        <div class="flex items-center gap-2">
-
-          <button
-            type="button"
-            class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"
-            @click="editAlias(alias)"
+          <svg
+            class="h-5 w-5"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            stroke-width="1.8"
           >
-            Edit
-          </button>
+            <circle
+              cx="11"
+              cy="11"
+              r="7"
+            />
 
-          <button
-            :disabled="actionId === alias.id"
-            class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-            @click="toggleAlias(alias)"
+            <path
+              stroke-linecap="round"
+              d="m20 20-4-4"
+            />
+          </svg>
+        </div>
+
+        <p
+          class="mt-4 text-sm font-semibold text-slate-700"
+        >
+          No matching aliases
+        </p>
+
+        <p class="mt-1 text-sm text-slate-500">
+          Try changing your search or filters.
+        </p>
+      </div>
+
+      <!-- Results -->
+      <div
+        v-else
+        class="divide-y divide-slate-100"
+      >
+        <div
+          v-for="alias in filteredAliases"
+          :key="alias.id"
+          class="flex flex-col gap-4 px-5 py-5 transition hover:bg-slate-50/60 sm:grid sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:gap-6 sm:px-6"
+        >
+          <!-- Alias information -->
+          <div class="min-w-0">
+            <div class="flex items-center gap-3">
+              <div
+                class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-sm font-semibold text-slate-600"
+              >
+                @
+              </div>
+
+              <div class="min-w-0">
+                <p
+                  class="truncate text-sm font-semibold text-slate-900"
+                >
+                  {{ alias.address }}
+                </p>
+
+                <p
+                  v-if="alias.destination"
+                  class="mt-1 truncate text-sm text-slate-600"
+                >
+                  {{ alias.destination }}
+                </p>
+
+                <p
+                  v-else
+                  class="mt-1 text-sm italic text-amber-600"
+                >
+                  No destination configured
+                </p>
+
+                <p
+                  v-if="alias.note"
+                  class="mt-2 max-w-xl truncate text-xs italic text-slate-500"
+                  :title="alias.note"
+                >
+                  {{ alias.note }}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Actions -->
+          <div
+            class="flex items-center justify-between gap-3 sm:justify-end"
           >
-            {{
-              actionId === alias.id
-                ? 'Working...'
-                : alias.enabled
-                  ? 'Disable'
-                  : 'Enable'
-            }}
-          </button>
+            <!-- Status -->
+            <span
+              class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold"
+              :class="
+                alias.enabled
+                  ? 'bg-emerald-50 text-emerald-700'
+                  : 'bg-slate-100 text-slate-600'
+              "
+            >
+              <span
+                class="h-1.5 w-1.5 rounded-full"
+                :class="
+                  alias.enabled
+                    ? 'bg-emerald-500'
+                    : 'bg-slate-400'
+                "
+              />
 
-          <button
-            :disabled="actionId === alias.id"
-            class="rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
-            title="Delete alias"
-            @click="requestDeleteAlias(alias)"
-          >
-            Delete
-          </button>
+              {{ alias.enabled ? 'Active' : 'Disabled' }}
+            </span>
 
+            <div class="flex items-center gap-2">
+              <!-- Edit -->
+              <button
+                type="button"
+                :disabled="actionId === alias.id"
+                class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-50"
+                @click="editAlias(alias)"
+              >
+                Edit
+              </button>
 
+              <!-- iOS-style toggle -->
+              <button
+                type="button"
+                role="switch"
+                :aria-checked="alias.enabled"
+                :aria-label="
+                  alias.enabled
+                    ? 'Disable alias'
+                    : 'Enable alias'
+                "
+                :disabled="actionId === alias.id"
+                class="relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
+                :class="
+                  alias.enabled
+                    ? 'bg-indigo-600'
+                    : 'bg-slate-300'
+                "
+                @click="toggleAlias(alias)"
+              >
+                <span
+                  class="inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition-transform duration-200"
+                  :class="
+                    alias.enabled
+                      ? 'translate-x-6'
+                      : 'translate-x-1'
+                  "
+                />
+
+                <span
+                  v-if="actionId === alias.id"
+                  class="absolute inset-0 flex items-center justify-center"
+                >
+                  <svg
+                    class="h-3.5 w-3.5 animate-spin text-slate-500"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                  >
+                    <circle
+                      class="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      stroke-width="3"
+                    />
+
+                    <path
+                      class="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8v3a5 5 0 00-5 5H4z"
+                    />
+                  </svg>
+                </span>
+              </button>
+
+              <!-- Delete -->
+              <button
+                type="button"
+                :disabled="actionId === alias.id"
+                class="rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                title="Delete alias"
+                @click="requestDeleteAlias(alias)"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
-  </div>
-</div>
 
-<!-- Create modal -->
-<CreateAliasModal
-  v-if="showCreateModal"
-  :error="createAliasError"
-  :loading="creatingAlias"
-  @close="showCreateModal = false"
-  @create="createAlias"
-/>
+    <!-- Create modal -->
+    <CreateAliasModal
+      v-if="showCreateModal"
+      :error="createAliasError"
+      :loading="creatingAlias"
+      @close="showCreateModal = false"
+      @create="createAlias"
+    />
 
-<ConfirmModal
-  v-if="aliasPendingDeletion"
-  title="Delete alias?"
-  :message="`You're about to permanently delete ${aliasPendingDeletion.address}. This action cannot be undone.`"
-  confirm-text="Delete alias"
-  danger
-  :loading="actionId === aliasPendingDeletion.id"
-  @close="aliasPendingDeletion = null"
-  @confirm="deleteAlias(aliasPendingDeletion)"
-/>
+    <!-- Delete confirmation -->
+    <ConfirmModal
+      v-if="aliasPendingDeletion"
+      title="Delete alias?"
+      :message="`You're about to permanently delete ${aliasPendingDeletion.address}. This action cannot be undone.`"
+      confirm-text="Delete alias"
+      danger
+      :loading="
+        actionId === aliasPendingDeletion.id
+      "
+      @close="aliasPendingDeletion = null"
+      @confirm="deleteAlias(aliasPendingDeletion)"
+    />
 
-
-<EditAliasModal
-  v-if="aliasPendingEdit"
-  :alias="aliasPendingEdit"
-  @close="aliasPendingEdit = null"
-  @saved="aliasSaved"
-/>
+    <!-- Edit modal -->
+    <EditAliasModal
+      v-if="aliasPendingEdit"
+      :alias="aliasPendingEdit"
+      @close="aliasPendingEdit = null"
+      @saved="aliasSaved"
+    />
   </div>
 </template>

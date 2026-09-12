@@ -69,7 +69,7 @@ async function login() {
 
 <template>
   <main
-    class="flex min-h-screen min-h-[100dvh] items-center justify-center
+    class="flex min-h-screen items-center justify-center
            bg-slate-50 px-4 py-8"
   >
     <div
